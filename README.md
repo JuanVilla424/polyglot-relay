@@ -1,15 +1,13 @@
-# 📄 GitHub CI/CD Template
+# 🌐 polyglot-relay
 
-![CI/CD](https://img.shields.io/badge/CI/CD-Pipeline-blue)
-![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)
-![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)
-![Build Status](https://github.com/JuanVilla424/github-cicd-template/actions/workflows/ci.yml/badge.svg?branch=main)
+![Build Status](https://github.com/JuanVilla424/polyglot-relay/actions/workflows/ci.yml/badge.svg?branch=main)
+![Python](https://img.shields.io/badge/Python-3.12%2B-blue.svg)
 ![Status](https://img.shields.io/badge/Status-Stable-green.svg)
 ![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)
 
-Welcome to the **GitHub CI/CD Template** repository! This project provides a robust and flexible CI/CD pipeline setup using GitHub Actions, tailored for project using Python for backend, node frontend, docker-compose or Dockerfile. Leverage this template to automate your development workflow, from testing and building to deployment and monitoring.
+**polyglot-relay** is a self-hosted Discord auto-translation bot. It replaces rate-limited SaaS translators (like iTranslator's 10,000 chars/server and 2,000 chars/user free-tier caps, with the full language catalog paywalled behind Premium) with a fully self-hosted pipeline: no character limits, no paywalled languages, and no dependency on a paid third-party translation API. Language detection runs on [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate); the actual translation runs on a self-hosted [NLLB-200](https://github.com/facebookresearch/flores/tree/main/flores200) (Meta) model via [CTranslate2](https://github.com/OpenNMT/CTranslate2) for meaningfully better quality than Argos Translate alone.
 
-<img src="https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fwww.pngkey.com%2Fpng%2Ffull%2F178-1787243_github-icon-png.png&f=1&nofb=1&ipt=913bc5d745baa725efe14b20bdf6ca3f91044c2be909e8504cc79f13dc0b1729&ipo=images" width="112" alt="CI/CD">
+Each server member sets their own preferred language once — directly, inherited from a role, or set for them by an admin. From then on, every message gets a **reply**, in the same channel, with a color-coded translation embed for every language actually active there, plus the server's configured fallback language — no extra click, and it doesn't ping the original author. Admins can switch a server to thread delivery instead with `/setbehavior`. A right-click "Translate Message" command is also available for one-off, ephemeral translations.
 
 ## 📚 Table of Contents
 
@@ -18,6 +16,8 @@ Welcome to the **GitHub CI/CD Template** repository! This project provides a rob
   - [Prerequisites](#-prerequisites)
   - [Installation](#-installation)
   - [Environment Setup](#-environment-setup)
+  - [Discord Application Setup](#-discord-application-setup)
+  - [Running the Bot](#-running-the-bot)
   - [Pre-Commit Hooks](#-pre-commit-hooks)
   - [Extra Steps](#-extra-steps)
 - [Usage](#-usage)
@@ -27,24 +27,28 @@ Welcome to the **GitHub CI/CD Template** repository! This project provides a rob
 
 ## 🌟 Features
 
-- **Automated Testing:** Run tests automatically on each push and pull request.
-- **Continuous Deployment:** Deploy your application seamlessly to your chosen platform.
-- **Code Quality Checks:** Enforce coding standards with linting and formatting tools.
-- **Build Optimization:** Optimize build processes for faster deployment cycles.
-- **Notifications:** Receive updates and alerts on pipeline status via email or chat integrations.
-- **Automated Version Control:** Automatic version bumping, tagging, and promotion across branches (dev → test → prod → main).
-- **Automated Release Notes:** GitHub Releases with categorized changelogs generated from conventional commits (Features, Bug Fixes, Refactors, etc.).
-- **Changelog Generation:** Automatic CHANGELOG.md updates on every version bump via pre-commit hooks.
+- **No character limits:** self-hosted LibreTranslate, no free-tier caps to hit or vote-to-reset.
+- **Full language catalog:** nothing paywalled behind a premium tier.
+- **In-channel reply delivery:** translations post as a native reply to the original message, one color-coded embed per active language, visible to everyone who can see that channel — no thread to open, no ping to the author. Admins can opt a server into thread delivery instead with `/setbehavior`.
+- **Flexible language configuration:** members set their own language, admins can set it for a specific member, a role, or the whole server as a fallback — an explicit setting always overrides a role default.
+- **On-demand fallback:** right-click any message → Apps → "Translate Message" for a one-off ephemeral translation (no privileged Discord intent needed for this path).
+- **Fully self-hosted:** three Docker services (`libretranslate` for language detection, `nllb` for translation, `bot`), no external translation API or third-party bot dependency.
+- **Automated Version Control:** automatic version bumping, tagging, and promotion across branches (dev → test → prod → main).
+- **Automated Release Notes:** GitHub Releases with categorized changelogs generated from conventional commits.
 
 ## 🚀 Getting Started
 
 ### 📋 Prerequisites
 
-**Before you begin, ensure you have met the following requirements**:
+**To just run the bot** (self-hosting, no code changes):
+
+- **Git:** Install [Git](https://git-scm.com/) to clone the repository.
+- **Docker + Docker Compose:** runs all three services (`libretranslate`, `nllb`, `bot`) — see [Running the Bot](#-running-the-bot).
+
+**To develop or contribute** _(development only, on top of the above)_:
 
 - **GitHub Account:** You need a GitHub account to use GitHub Actions.
-- **Python 3.12+:** Ensure Python is installed on your local machine.
-- **Git:** Install [Git](https://git-scm.com/) to clone the repository.
+- **Python 3.12+:** for running the test suite and pre-commit hooks locally — the bot itself always runs in Docker, not from this venv.
 - **NVM:** (Optional) Node.js installation environment versions control
 - **Node.js 22.x+**: (Optional) (Required to Push) Used as lint orchestration manager in pre-commit and pre-push
 
@@ -53,15 +57,17 @@ Welcome to the **GitHub CI/CD Template** repository! This project provides a rob
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/JuanVilla424/github-cicd-template.git
+   git clone https://github.com/JuanVilla424/polyglot-relay.git
    ```
 
 2. Navigate to the Project Directory
    ```bash
-    cd github-cicd-template
+    cd polyglot-relay
    ```
 
 ### 🔧 Environment Setup
+
+_Development only — running the bot doesn't need this, it always runs in Docker (see [Running the Bot](#-running-the-bot)). This venv is only for running tests or pre-commit hooks locally._
 
 **Mandatory: Setting Up a Python Virtual Environment**
 
@@ -118,7 +124,32 @@ Setting up a Python virtual environment ensures that dependencies are managed ef
 
 5. **Docker Extra Steps**: Install Scoop and then install hadolint using scoop, refer to [Extra Steps](#-extra-steps)
 
+### 🤖 Discord Application Setup
+
+`polyglot-relay` needs its own Discord bot — this is a manual, one-time setup in the Discord Developer Portal (the bot token is a secret and must never be committed):
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**.
+2. Under **Bot**, click **Reset Token** and copy it into your local `.env` as `DISCORD_BOT_TOKEN` (copy `.env.template` to `.env` first — `.env` is gitignored).
+3. Still under **Bot** → **Privileged Gateway Intents**, enable **Message Content Intent** and **Server Members Intent**. Both toggles work without Discord's app-review process as long as the bot stays under the ~100-server visibility threshold — which is the case for a personal/private-server bot. Members Intent is what lets role-based language auto-translation (`/setrolelanguage`) enumerate who has which role; it isn't needed for `/setlanguage` or the right-click translate alone.
+4. Under **OAuth2 → URL Generator**, select scopes `bot` and `applications.commands`, and permissions `Send Messages`, `Read Message History`, `Use Application Commands`. Open the generated URL to invite the bot to your server. If you plan to use `/setbehavior thread` (see Bot Commands below), also select `Create Public Threads` and `Send Messages in Threads` — not needed for the default reply mode. Reopening the same invite URL with an updated permission selection re-grants them to an already-invited bot without duplicating it.
+5. _(Optional)_ To get language-command activity (successes and rejected attempts) reported to a channel: enable Discord's **Developer Mode** (User Settings → Advanced), right-click the target channel → **Copy Channel ID**, and set it as `LOG_CHANNEL_ID` in `.env`. The bot needs `Send Messages` permission in that specific channel too.
+
+### 🐳 Running the Bot
+
+```bash
+cp .env.template .env      # fill in DISCORD_BOT_TOKEN
+docker compose up -d
+```
+
+This starts three services, none exposed outside the internal Docker network: `libretranslate` (language detection only — 50 languages as of v1.9.6), `nllb` (translation, via a self-hosted NLLB-200 distilled-600M model converted from Meta's official weights the first time it's needed), and `bot`. `libretranslate` downloads its models on first run (several minutes, multiple GB); `nllb` converts its model lazily on the first real translation request instead of at startup, so the very first translation after a fresh deploy is noticeably slower than the rest — all three (including the bot's own `data/user_languages.json`/`role_languages.json`/`server_language.json`) live in named Docker volumes, which inherit the right ownership from each image automatically (no host-side `chmod` needed) and persist across restarts. All three services have healthchecks; the bot's works via a heartbeat file (`/tmp/healthy`, touched every 30s while the gateway connection is alive) since it isn't an HTTP service.
+
+If you're upgrading from an older deploy that used a `./data` bind mount, migrate the existing JSON files into the named volume before recreating the container: `docker run --rm -v ./data:/src:ro -v polyglot-relay_polyglot-relay-data:/dst alpine sh -c "cp /src/*.json /dst/ && chown -R 1000:1000 /dst"`.
+
+Language coverage for translation is limited to the languages mapped in `app/lang_codes.py` (curated common languages, not the full FLORES-200/200-language set) — `/setlanguage` with an unmapped code fails with a clear error instead of mistranslating.
+
 ### 🛸 Pre-Commit Hooks
+
+_Development only, for contributors — not needed to run the bot._
 
 **Install and check pre-commit hooks**: MD files changes countermeasures, python format, python lint, yaml format, yaml lint, version control hook, changelog auto-generation
 
@@ -131,6 +162,8 @@ pre-commit run --all-files
 ```
 
 ### 📌 Extra Steps
+
+_Development only — installs `hadolint`, used by the pre-commit Dockerfile-lint hook. Not needed to run the bot._
 
 1. **Docker**:
    - Using MacOs or Linux:
@@ -146,14 +179,33 @@ pre-commit run --all-files
 
 ## 🛠️ Usage
 
-**To utilize the CI/CD pipeline, follow these steps**:
+### Bot Commands
+
+- **`/setlanguage <code>`**: set your own preferred language (e.g. `es`, `en`, `fr`). Required before you're included in any translations, unless a role already covers you (see below).
+- **`/clearlanguage`**: remove your own preferred language.
+- **`/setuserlanguage <member> <code>`** _(admin, Manage Server permission)_: set someone else's language for them — for people who won't run the command themselves.
+- **`/clearuserlanguage <member>`** _(admin)_: remove another member's explicit language.
+- **`/setrolelanguage <role> <code>`** _(admin, Manage Server permission)_: any member with that role gets included in translations in that language by default. An explicit `/setlanguage`/`/setuserlanguage` for that person always overrides their role.
+- **`/clearrolelanguage <role>`** _(admin)_: remove a role's language mapping.
+- **`/setserverlanguage <code>`** _(admin, Manage Server permission)_: set this server's fallback translation language — always included in every translation, on top of whatever members/roles have configured. Defaults to English until an admin sets one.
+- **`/clearserverlanguage`** _(admin)_: reset the server's fallback language back to the default (English).
+- **`/setbehavior <mode>`** _(admin, Manage Server permission)_: choose how translations are delivered — **Reply in the channel** (default) or **Open a thread**. Picked from a dropdown, not typed.
+- **`/clearbehavior`** _(admin)_: reset translation delivery back to the default (reply).
+- **`/languages`**: list every language code the bot currently supports, with its name.
+- **`/help`**: summary of every command above, in one place.
+- **Right-click a message → Apps → Translate Message**: on-demand ephemeral translation of that one message, visible only to you, regardless of whether you've set a language.
+- **Right-click a message → Apps → Retry Translation** _(admin)_: manually re-runs the automatic translation on that specific message — for when it didn't fire on its own (e.g. the bot was down when the message was sent). Reports back (ephemeral) whether it delivered a translation, found nothing to translate, or failed.
+- **Automatic translation delivery**: for every message, the bot collects the distinct languages (explicit or via role) among members who can actually see that channel, skipping the author and any language that already matches the detected source, and always includes the server's fallback language (English by default, override with `/setserverlanguage`). If at least one applies, it delivers the translation in the same channel — public, never a DM — either as a **reply** to the message (default: no extra click, doesn't ping the author, Discord's native reply reference links back to the source) or as a **thread** on the message, per the server's `/setbehavior` setting. Each language gets its own color-coded embed (title `code — Name`, a fixed color per code from `app/lang_codes.py`'s validated 8-color categorical palette, reused past the 8th language — identity is never color-alone, the code/name text is always there too) so languages are visually distinguishable at a glance. Batched across multiple messages if there are more than 10 active languages or the combined text is large (Discord's per-message embed count/size limits). If nobody in the channel has a language configured, nothing is sent. There's no per-channel throttling, but translation requests to the `nllb` service are capped at 2 concurrent in-flight calls to avoid saturating it during a burst.
+
+### CI/CD Pipeline
+
+**To customize the CI/CD pipeline for this repo, follow these steps**:
 
 1. **Configure GitHub Actions**
    - Navigate to the .github/workflows/ directory.
    - Customize the ci.yml file according to your project's requirements.
    - Customize the python.yml file to format and lint python code.
-   - Customize the node.yml file to format and lint node.js code if you are hosting frontend.
-   - Customize the release-controller file to add or remove **[backend, frontend, docker deployment, database]**
+   - Customize the release-controller file to add or remove **[app, tests, docker deployment]**
 
 2. **Set Up Secrets**
    - Go to your GitHub repository settings.

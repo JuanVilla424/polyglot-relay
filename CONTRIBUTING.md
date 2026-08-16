@@ -1,6 +1,6 @@
-# 🤝 Contributing to github-cicd-template
+# 🤝 Contributing to polyglot-relay
 
-We welcome contributions to github-cicd-template! To make sure the process goes smoothly, please follow these guidelines:
+We welcome contributions to polyglot-relay! To make sure the process goes smoothly, please follow these guidelines:
 
 ## 📋 Code of Conduct
 
@@ -20,10 +20,13 @@ Please note that all participants in our project are expected to follow our [Cod
    Implement your feature or fix the bug in your branch. Make sure to include tests where applicable and follow coding standards.
 
 4. **Test your changes**:
-   Run the test suite to ensure your changes don’t break any functionality:
+   Run the test suite to ensure your changes don’t break any functionality (the `bot` image only ships production dependencies, so run tests from your local venv, not inside the container):
 
-   docker-compose exec backend pytest # For backend tests
-   docker-compose exec frontend npm test # For frontend tests
+   pytest
+
+   Changes under `nllb/` need its own venv (heavy ML deps: ctranslate2/transformers/torch, kept separate from the bot's):
+
+   cd nllb && python -m venv venv && source venv/bin/activate && pip install -r requirements.txt -r requirements-dev.txt && pytest
 
 5. **Commit your changes**:
    Use meaningful commit messages that explain what you have done:
@@ -40,7 +43,7 @@ Please note that all participants in our project are expected to follow our [Cod
 
 ## 📑 Guidelines for Contributions
 
-- **Lint your code** before submitting a pull request. We use [ESLint](https://eslint.org/) for frontend and [pylint](https://www.pylint.org/) for backend linting.
+- **Lint your code** before submitting a pull request. We use [pylint](https://www.pylint.org/) and [black](https://black.readthedocs.io/) for linting/formatting.
 - Ensure **test coverage** for your code. Uncovered code may delay the approval process.
 - Write clear, concise **commit messages**.
 
