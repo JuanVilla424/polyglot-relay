@@ -37,6 +37,8 @@ async def translate_message(interaction: discord.Interaction, message: discord.M
         )
         return
 
+    await interaction.response.defer(ephemeral=True)
+
     target = None
     if interaction.guild_id is not None:
         target = storage.get_user_language(interaction.guild_id, interaction.user.id)
@@ -46,14 +48,10 @@ async def translate_message(interaction: discord.Interaction, message: discord.M
         translated, detected = await translator.translate(message.content, target)
     except Exception:
         logger.exception("on-demand translation failed")
-        await interaction.response.send_message(
-            "Translation failed, try again later.", ephemeral=True
-        )
+        await interaction.followup.send("Translation failed, try again later.", ephemeral=True)
         return
 
-    await interaction.response.send_message(
-        f"**{detected} → {target}**\n{translated}", ephemeral=True
-    )
+    await interaction.followup.send(f"**{detected} → {target}**\n{translated}", ephemeral=True)
 
 
 @client.event
