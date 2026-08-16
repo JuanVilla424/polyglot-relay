@@ -1,13 +1,15 @@
-# 📄 GitHub CI/CD Template
+# 🌐 polyglot-relay
 
 ![CI/CD](https://img.shields.io/badge/CI/CD-Pipeline-blue)
 ![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)
 ![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)
-![Build Status](https://github.com/JuanVilla424/github-cicd-template/actions/workflows/ci.yml/badge.svg?branch=main)
+![Build Status](https://github.com/JuanVilla424/polyglot-relay/actions/workflows/ci.yml/badge.svg?branch=main)
 ![Status](https://img.shields.io/badge/Status-Stable-green.svg)
 ![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)
 
-Welcome to the **GitHub CI/CD Template** repository! This project provides a robust and flexible CI/CD pipeline setup using GitHub Actions, tailored for project using Python for backend, node frontend, docker-compose or Dockerfile. Leverage this template to automate your development workflow, from testing and building to deployment and monitoring.
+**polyglot-relay** is a self-hosted Discord auto-translation bot. It replaces rate-limited SaaS translators (like iTranslator's 10,000 chars/server and 2,000 chars/user free-tier caps, with the full language catalog paywalled behind Premium) with your own [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate) instance: no character limits, no paywalled languages.
+
+Each server member sets their own preferred language once. From then on, every message is translated and delivered to them **privately via DM**, in their language — nothing is posted publicly in the channel. A right-click "Translate Message" command is also available for one-off, on-demand translations.
 
 <img src="https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fwww.pngkey.com%2Fpng%2Ffull%2F178-1787243_github-icon-png.png&f=1&nofb=1&ipt=913bc5d745baa725efe14b20bdf6ca3f91044c2be909e8504cc79f13dc0b1729&ipo=images" width="112" alt="CI/CD">
 
@@ -18,6 +20,7 @@ Welcome to the **GitHub CI/CD Template** repository! This project provides a rob
   - [Prerequisites](#-prerequisites)
   - [Installation](#-installation)
   - [Environment Setup](#-environment-setup)
+  - [Discord Application Setup](#-discord-application-setup)
   - [Pre-Commit Hooks](#-pre-commit-hooks)
   - [Extra Steps](#-extra-steps)
 - [Usage](#-usage)
@@ -27,14 +30,13 @@ Welcome to the **GitHub CI/CD Template** repository! This project provides a rob
 
 ## 🌟 Features
 
-- **Automated Testing:** Run tests automatically on each push and pull request.
-- **Continuous Deployment:** Deploy your application seamlessly to your chosen platform.
-- **Code Quality Checks:** Enforce coding standards with linting and formatting tools.
-- **Build Optimization:** Optimize build processes for faster deployment cycles.
-- **Notifications:** Receive updates and alerts on pipeline status via email or chat integrations.
-- **Automated Version Control:** Automatic version bumping, tagging, and promotion across branches (dev → test → prod → main).
-- **Automated Release Notes:** GitHub Releases with categorized changelogs generated from conventional commits (Features, Bug Fixes, Refactors, etc.).
-- **Changelog Generation:** Automatic CHANGELOG.md updates on every version bump via pre-commit hooks.
+- **No character limits:** self-hosted LibreTranslate, no free-tier caps to hit or vote-to-reset.
+- **Full language catalog:** nothing paywalled behind a premium tier.
+- **Private per-user delivery:** each member gets translations DMed in their own configured language — the channel stays untouched.
+- **On-demand fallback:** right-click any message → Apps → "Translate Message" for a one-off ephemeral translation (no privileged Discord intent needed for this path).
+- **Fully self-hosted:** two Docker services (`libretranslate` + `bot`), no external translation API or third-party bot dependency.
+- **Automated Version Control:** automatic version bumping, tagging, and promotion across branches (dev → test → prod → main).
+- **Automated Release Notes:** GitHub Releases with categorized changelogs generated from conventional commits.
 
 ## 🚀 Getting Started
 
@@ -53,12 +55,12 @@ Welcome to the **GitHub CI/CD Template** repository! This project provides a rob
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/JuanVilla424/github-cicd-template.git
+   git clone https://github.com/JuanVilla424/polyglot-relay.git
    ```
 
 2. Navigate to the Project Directory
    ```bash
-    cd github-cicd-template
+    cd polyglot-relay
    ```
 
 ### 🔧 Environment Setup
@@ -118,6 +120,24 @@ Setting up a Python virtual environment ensures that dependencies are managed ef
 
 5. **Docker Extra Steps**: Install Scoop and then install hadolint using scoop, refer to [Extra Steps](#-extra-steps)
 
+### 🤖 Discord Application Setup
+
+`polyglot-relay` needs its own Discord bot — this is a manual, one-time setup in the Discord Developer Portal (the bot token is a secret and must never be committed):
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**.
+2. Under **Bot**, click **Reset Token** and copy it into your local `.env` as `DISCORD_BOT_TOKEN` (copy `.env.template` to `.env` first — `.env` is gitignored).
+3. Still under **Bot** → **Privileged Gateway Intents**, enable **Message Content Intent**. This toggle works without Discord's app-review process as long as the bot stays under the ~100-server visibility threshold — which is the case for a personal/private-server bot.
+4. Under **OAuth2 → URL Generator**, select scopes `bot` and `applications.commands`, and permissions `Send Messages`, `Read Message History`, `Use Application Commands`. Open the generated URL to invite the bot to your server.
+
+### 🐳 Running the Bot
+
+```bash
+cp .env.template .env   # fill in DISCORD_BOT_TOKEN
+docker compose up -d
+```
+
+This starts two services: `libretranslate` (the translation engine, with its full language catalog — 50 languages as of v1.9.6, verified via its `/languages` endpoint — reachable only from the `bot` service over the internal Docker network) and `bot` (the Discord bot itself). Language models are downloaded into a persistent volume on first run; expect the first boot to take several minutes and multiple GB of network traffic while `libretranslate` fetches every model, subsequent restarts reuse the volume and start immediately.
+
 ### 🛸 Pre-Commit Hooks
 
 **Install and check pre-commit hooks**: MD files changes countermeasures, python format, python lint, yaml format, yaml lint, version control hook, changelog auto-generation
@@ -146,14 +166,21 @@ pre-commit run --all-files
 
 ## 🛠️ Usage
 
-**To utilize the CI/CD pipeline, follow these steps**:
+### Bot Commands
+
+- **`/setlanguage <code>`**: set your own preferred language (e.g. `es`, `en`, `fr`). Required before you receive any DM translations.
+- **Right-click a message → Apps → Translate Message**: on-demand ephemeral translation of that one message, visible only to you, regardless of whether you've set a language.
+- **Automatic DMs**: once you've set a language, every new message from other members (in a channel the bot can read) that isn't already in your language is translated and DMed to you. Members who never ran `/setlanguage` receive nothing — no language is guessed on their behalf. In very active channels this can mean a lot of DMs; there's no throttling by default.
+
+### CI/CD Pipeline
+
+**To customize the CI/CD pipeline for this repo, follow these steps**:
 
 1. **Configure GitHub Actions**
    - Navigate to the .github/workflows/ directory.
    - Customize the ci.yml file according to your project's requirements.
    - Customize the python.yml file to format and lint python code.
-   - Customize the node.yml file to format and lint node.js code if you are hosting frontend.
-   - Customize the release-controller file to add or remove **[backend, frontend, docker deployment, database]**
+   - Customize the release-controller file to add or remove **[app, tests, docker deployment]**
 
 2. **Set Up Secrets**
    - Go to your GitHub repository settings.
