@@ -127,7 +127,7 @@ Setting up a Python virtual environment ensures that dependencies are managed ef
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**.
 2. Under **Bot**, click **Reset Token** and copy it into your local `.env` as `DISCORD_BOT_TOKEN` (copy `.env.template` to `.env` first — `.env` is gitignored).
 3. Still under **Bot** → **Privileged Gateway Intents**, enable **Message Content Intent** and **Server Members Intent**. Both toggles work without Discord's app-review process as long as the bot stays under the ~100-server visibility threshold — which is the case for a personal/private-server bot. Members Intent is what lets role-based language auto-DMs (`/setrolelanguage`) enumerate who has which role; it isn't needed for `/setlanguage` or the right-click translate alone.
-4. Under **OAuth2 → URL Generator**, select scopes `bot` and `applications.commands`, and permissions `Send Messages`, `Read Message History`, `Use Application Commands`. Open the generated URL to invite the bot to your server.
+4. Under **OAuth2 → URL Generator**, select scopes `bot` and `applications.commands`, and permissions `Send Messages`, `Read Message History`, `Use Application Commands`, `Create Public Threads`, `Send Messages in Threads` (needed for the auto-translation thread — see Bot Commands below). Open the generated URL to invite the bot to your server. If the bot is already invited without the thread permissions, reopening the same invite URL with the updated permission selection re-grants them without duplicating the bot.
 5. _(Optional)_ To get language-command activity (successes and rejected attempts) reported to a channel: enable Discord's **Developer Mode** (User Settings → Advanced), right-click the target channel → **Copy Channel ID**, and set it as `LOG_CHANNEL_ID` in `.env`. The bot needs `Send Messages` permission in that specific channel too.
 
 ### 🐳 Running the Bot
@@ -182,7 +182,7 @@ pre-commit run --all-files
 - **`/languages`**: list every language code the bot currently supports, with its name.
 - **`/help`**: summary of every command above, in one place.
 - **Right-click a message → Apps → Translate Message**: on-demand ephemeral translation of that one message, visible only to you, regardless of whether you've set a language.
-- **Automatic DMs**: once a member has a language — explicit or via role — every new message from other members (in a channel the bot can read) that isn't already in their language is translated and DMed to them. Members with neither an explicit language nor a mapped role receive nothing — no language is guessed on their behalf. In very active channels this can mean a lot of DMs; there's no per-user throttling, but translation requests to the `nllb` service are capped at 2 concurrent in-flight calls to avoid saturating it during a burst.
+- **Automatic thread translation**: for every message, the bot collects the distinct languages (explicit or via role) among members who can actually see that channel, skipping the author and any language that already matches the detected source. If at least one applies, it opens a thread on the message ("🌐 Translation") with one combined reply covering every active language — public, in the same channel, not a DM. If nobody in the channel has a language configured, no thread is created. There's no per-channel throttling, but translation requests to the `nllb` service are capped at 2 concurrent in-flight calls to avoid saturating it during a burst.
 
 ### CI/CD Pipeline
 

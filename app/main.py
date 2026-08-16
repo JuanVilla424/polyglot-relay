@@ -37,18 +37,18 @@ def _resolve_member_language(member: discord.Member) -> str | None:
     return None
 
 
-def _resolve_guild_recipients(guild: discord.Guild) -> dict[int, str]:
-    """Every member with an explicit or role-based language, keyed by user id."""
-    recipients: dict[int, str] = {}
-    role_languages = storage.guild_role_languages(guild.id)
-    if role_languages:
-        for member in guild.members:
-            for role in member.roles:
-                if role.id in role_languages:
-                    recipients[member.id] = role_languages[role.id]
-                    break
-    recipients.update(storage.guild_user_languages(guild.id))
-    return recipients
+def _channel_active_languages(channel: discord.TextChannel, exclude_user_id: int) -> set[str]:
+    """Distinct languages (explicit or role-based) among members who can see this channel."""
+    active_languages: set[str] = set()
+    for member in channel.guild.members:
+        if member.id == exclude_user_id or member.bot:
+            continue
+        if not channel.permissions_for(member).view_channel:
+            continue
+        language = _resolve_member_language(member)
+        if language:
+            active_languages.add(language)
+    return active_languages
 
 
 async def _report_language_change(message: str) -> None:
@@ -281,35 +281,37 @@ async def on_ready():
 
 @client.event
 async def on_message(message: discord.Message):
-    """DM each opted-in guild member (explicit or role-based) a translation, skipping the author."""
+    """Reply in a thread with the message translated into every language active here."""
     if message.author.bot or message.guild is None or not message.content:
         return
-
-    recipients = _resolve_guild_recipients(message.guild)
-    recipients.pop(message.author.id, None)
-    if not recipients:
+    if not isinstance(message.channel, discord.TextChannel):
         return
 
-    for user_id, target_lang in recipients.items():
+    target_languages = _channel_active_languages(message.channel, message.author.id)
+    if not target_languages:
+        return
+
+    lines = []
+    for target_lang in sorted(target_languages):
         try:
             translated, detected = await translator.translate(message.content, target_lang)
         except Exception:
-            logger.exception("auto-translate failed for user %s", user_id)
+            logger.exception("channel translation failed for language %s", target_lang)
             continue
 
         if detected == target_lang:
             continue
 
-        try:
-            user = client.get_user(user_id) or await client.fetch_user(user_id)
-            await user.send(
-                f"**#{message.channel.name}** · {message.author.display_name} "
-                f"({detected} → {target_lang})\n{translated}"
-            )
-        except discord.Forbidden:
-            logger.warning("cannot DM user %s (DMs closed or no shared server)", user_id)
-        except discord.HTTPException:
-            logger.exception("failed to DM user %s", user_id)
+        lines.append(f"**{target_lang}**: {translated}")
+
+    if not lines:
+        return
+
+    try:
+        thread = await message.create_thread(name="🌐 Translation", auto_archive_duration=1440)
+        await thread.send("\n".join(lines))
+    except discord.HTTPException:
+        logger.exception("failed to create/post translation thread")
 
 
 def main():

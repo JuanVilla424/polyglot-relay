@@ -18,20 +18,36 @@ def _use_tmp_store(tmp_path, monkeypatch):
 def _make_member(guild_id, user_id, role_ids=()):
     member = MagicMock()
     member.id = user_id
+    member.bot = False
     member.guild.id = guild_id
     member.roles = [MagicMock(id=rid) for rid in role_ids]
     return member
 
 
-def _make_message(guild_id, author_id, content="hello", author_is_bot=False):
+def _make_channel(members=(), hidden_from=()):
+    """A TextChannel-spec'd mock; members in hidden_from can't view_channel."""
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.guild.members = list(members)
+    hidden = set(hidden_from)
+
+    def _perms_for(member):
+        perms = MagicMock()
+        perms.view_channel = member not in hidden
+        return perms
+
+    channel.permissions_for.side_effect = _perms_for
+    return channel
+
+
+def _make_message(author_id, content="hello", author_is_bot=False, channel=None):
     message = MagicMock()
     message.author.id = author_id
     message.author.bot = author_is_bot
     message.author.display_name = "Author"
-    message.guild.id = guild_id
-    message.guild.members = []
     message.content = content
-    message.channel.name = "general"
+    message.channel = channel if channel is not None else _make_channel()
+    message.guild = message.channel.guild
+    message.create_thread = AsyncMock()
     return message
 
 
@@ -160,24 +176,44 @@ def test_resolve_member_language_none_when_unmapped(tmp_path, monkeypatch):
     assert bot_main._resolve_member_language(member) is None
 
 
-def test_resolve_guild_recipients_merges_roles_and_explicit(tmp_path, monkeypatch):
-    """Role holders and explicit users both show up; explicit overrides role for the same user."""
+def test_channel_active_languages_deduplicates_and_merges_roles(tmp_path, monkeypatch):
+    """Three members sharing 'es' count once; role and explicit languages both count."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_role_language(1, 10, "fr")
     storage.set_user_language(1, 200, "es")
-    storage.set_user_language(1, 300, "de")
+    storage.set_user_language(1, 300, "es")
     member_role_only = _make_member(1, 100, role_ids=[10])
-    member_explicit_overrides_role = _make_member(1, 300, role_ids=[10])
+    member_es_a = _make_member(1, 200)
+    member_es_b = _make_member(1, 300)
+    channel = _make_channel(members=[member_role_only, member_es_a, member_es_b])
 
-    guild = MagicMock()
-    guild.id = 1
-    guild.members = [member_role_only, member_explicit_overrides_role]
+    active = bot_main._channel_active_languages(channel, exclude_user_id=999)
 
-    recipients = bot_main._resolve_guild_recipients(guild)
+    assert active == {"fr", "es"}
 
-    assert recipients[100] == "fr"
-    assert recipients[300] == "de"
-    assert recipients[200] == "es"
+
+def test_channel_active_languages_excludes_the_author(tmp_path, monkeypatch):
+    """The message author's own language never counts as a target."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 100, "es")
+    member = _make_member(1, 100)
+    channel = _make_channel(members=[member])
+
+    active = bot_main._channel_active_languages(channel, exclude_user_id=100)
+
+    assert active == set()
+
+
+def test_channel_active_languages_excludes_members_who_cant_view_it(tmp_path, monkeypatch):
+    """Someone with a language set but no access to this specific channel doesn't count."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 100, "es")
+    member = _make_member(1, 100)
+    channel = _make_channel(members=[member], hidden_from=[member])
+
+    active = bot_main._channel_active_languages(channel, exclude_user_id=999)
+
+    assert active == set()
 
 
 def test_report_language_change_noop_when_unconfigured(monkeypatch):
@@ -290,7 +326,7 @@ def test_help_command_lists_every_command():
 def test_on_message_ignores_bot_authors(tmp_path, monkeypatch):
     """Messages from other bots never trigger auto-translate."""
     _use_tmp_store(tmp_path, monkeypatch)
-    message = _make_message(1, 100, author_is_bot=True)
+    message = _make_message(100, author_is_bot=True)
     translate_mock = AsyncMock()
     monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
 
@@ -299,46 +335,61 @@ def test_on_message_ignores_bot_authors(tmp_path, monkeypatch):
     translate_mock.assert_not_awaited()
 
 
-def test_on_message_dms_recipient_with_translation(tmp_path, monkeypatch):
-    """A recipient with a configured language gets a DM with the translation."""
+def test_on_message_creates_thread_with_combined_translations(tmp_path, monkeypatch):
+    """A channel with an active language gets a thread with the translation."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_user_language(1, 200, "es")
-    message = _make_message(1, 100, content="hello")
-    recipient = MagicMock()
-    recipient.send = AsyncMock()
-    monkeypatch.setattr(bot_main.client, "get_user", MagicMock(return_value=recipient))
+    member = _make_member(1, 200)
+    channel = _make_channel(members=[member])
+    message = _make_message(100, content="hello", channel=channel)
     monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
 
     asyncio.run(bot_main.on_message(message))
 
-    recipient.send.assert_awaited_once()
-    assert "hola" in recipient.send.call_args.args[0]
+    message.create_thread.assert_awaited_once()
+    thread = message.create_thread.return_value
+    thread.send.assert_awaited_once()
+    sent = thread.send.call_args.args[0]
+    assert "es" in sent
+    assert "hola" in sent
 
 
-def test_on_message_skips_dm_when_already_target_language(tmp_path, monkeypatch):
-    """No DM noise when the detected language already matches the recipient's."""
+def test_on_message_no_thread_when_detected_already_matches(tmp_path, monkeypatch):
+    """No thread noise when the detected language already matches the only active one."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_user_language(1, 200, "en")
-    message = _make_message(1, 100, content="hello")
-    recipient = MagicMock()
-    recipient.send = AsyncMock()
-    monkeypatch.setattr(bot_main.client, "get_user", MagicMock(return_value=recipient))
+    member = _make_member(1, 200)
+    channel = _make_channel(members=[member])
+    message = _make_message(100, content="hello", channel=channel)
     monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hello", "en")))
 
     asyncio.run(bot_main.on_message(message))
 
-    recipient.send.assert_not_awaited()
+    message.create_thread.assert_not_awaited()
 
 
-def test_on_message_handles_forbidden_dm_gracefully(tmp_path, monkeypatch):
-    """A recipient with closed DMs doesn't break processing for anyone else."""
+def test_on_message_no_thread_when_no_active_languages(tmp_path, monkeypatch):
+    """An empty channel (no one with a language configured) creates no thread."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    message = _make_message(100, content="hello")
+    translate_mock = AsyncMock()
+    monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
+
+    asyncio.run(bot_main.on_message(message))
+
+    translate_mock.assert_not_awaited()
+    message.create_thread.assert_not_awaited()
+
+
+def test_on_message_handles_thread_creation_failure_gracefully(tmp_path, monkeypatch):
+    """A permission error creating the thread doesn't raise out of the handler."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_user_language(1, 200, "es")
-    message = _make_message(1, 100, content="hello")
+    member = _make_member(1, 200)
+    channel = _make_channel(members=[member])
+    message = _make_message(100, content="hello", channel=channel)
     response = MagicMock(status=403, reason="Forbidden")
-    recipient = MagicMock()
-    recipient.send = AsyncMock(side_effect=discord.Forbidden(response, "cannot send"))
-    monkeypatch.setattr(bot_main.client, "get_user", MagicMock(return_value=recipient))
+    message.create_thread = AsyncMock(side_effect=discord.Forbidden(response, "no perms"))
     monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
 
     asyncio.run(bot_main.on_message(message))  # must not raise
