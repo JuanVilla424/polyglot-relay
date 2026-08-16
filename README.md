@@ -182,6 +182,7 @@ pre-commit run --all-files
 - **`/languages`**: list every language code the bot currently supports, with its name.
 - **`/help`**: summary of every command above, in one place.
 - **Right-click a message → Apps → Translate Message**: on-demand ephemeral translation of that one message, visible only to you, regardless of whether you've set a language.
+- **Right-click a message → Apps → Retry Translation Thread** _(admin)_: manually re-runs the automatic thread translation on that specific message — for when it didn't fire on its own (e.g. the bot was down when the message was sent). Reports back (ephemeral) whether it created a thread, found nothing to translate, or failed.
 - **Automatic thread translation**: for every message, the bot collects the distinct languages (explicit or via role) among members who can actually see that channel, skipping the author and any language that already matches the detected source. If at least one applies, it opens a thread on the message ("🌐 Translation") with one combined reply covering every active language — public, in the same channel, not a DM. If nobody in the channel has a language configured, no thread is created. There's no per-channel throttling, but translation requests to the `nllb` service are capped at 2 concurrent in-flight calls to avoid saturating it during a burst.
 
 ### CI/CD Pipeline

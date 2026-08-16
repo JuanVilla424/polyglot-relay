@@ -72,6 +72,7 @@ def test_commands_are_registered():
     assert "languages" in names
     assert "help" in names
     assert "Translate Message" in names
+    assert "Retry Translation Thread" in names
 
 
 def test_setlanguage_rejects_unsupported_code(tmp_path, monkeypatch):
@@ -368,16 +369,29 @@ def test_on_message_no_thread_when_detected_already_matches(tmp_path, monkeypatc
     message.create_thread.assert_not_awaited()
 
 
-def test_on_message_no_thread_when_no_active_languages(tmp_path, monkeypatch):
-    """An empty channel (no one with a language configured) creates no thread."""
+def test_on_message_falls_back_to_server_language_with_no_configured_members(tmp_path, monkeypatch):
+    """An empty channel still gets a server-language thread for a non-server-language message."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    message = _make_message(100, content="hola")
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("Hello", "es")))
+
+    asyncio.run(bot_main.on_message(message))
+
+    message.create_thread.assert_awaited_once()
+    sent = message.create_thread.return_value.send.call_args.args[0]
+    assert bot_main.SERVER_LANGUAGE in sent
+    assert "Hello" in sent
+
+
+def test_on_message_no_thread_when_already_in_server_language(tmp_path, monkeypatch):
+    """A message already in the server language, with no one else configured, gets no thread."""
     _use_tmp_store(tmp_path, monkeypatch)
     message = _make_message(100, content="hello")
-    translate_mock = AsyncMock()
+    translate_mock = AsyncMock(return_value=("hello", bot_main.SERVER_LANGUAGE))
     monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
 
     asyncio.run(bot_main.on_message(message))
 
-    translate_mock.assert_not_awaited()
     message.create_thread.assert_not_awaited()
 
 
@@ -393,3 +407,55 @@ def test_on_message_handles_thread_creation_failure_gracefully(tmp_path, monkeyp
     monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
 
     asyncio.run(bot_main.on_message(message))  # must not raise
+
+
+def test_retry_translation_thread_rejects_empty_message(tmp_path, monkeypatch):
+    """An admin can't retry a message with no content."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    message = _make_message(100, content="")
+
+    asyncio.run(bot_main.retry_translation_thread.callback(interaction, message))
+
+    interaction.response.send_message.assert_awaited_once()
+    message.create_thread.assert_not_awaited()
+
+
+def test_retry_translation_thread_creates_thread_and_reports_status(tmp_path, monkeypatch):
+    """A successful retry defers, runs the same logic as on_message, then reports success."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 200, "es")
+    member = _make_member(1, 200)
+    channel = _make_channel(members=[member])
+    message = _make_message(100, content="hello", channel=channel)
+    interaction = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
+
+    asyncio.run(bot_main.retry_translation_thread.callback(interaction, message))
+
+    interaction.response.defer.assert_awaited_once()
+    message.create_thread.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once_with("Thread created.", ephemeral=True)
+
+
+def test_retry_translation_thread_reports_when_nothing_to_translate(tmp_path, monkeypatch):
+    """No active languages -> the admin gets told nothing happened, not silence."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    message = _make_message(100, content="hello")
+    interaction = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    monkeypatch.setattr(
+        bot_main.translator,
+        "translate",
+        AsyncMock(return_value=("hello", bot_main.SERVER_LANGUAGE)),
+    )
+
+    asyncio.run(bot_main.retry_translation_thread.callback(interaction, message))
+
+    message.create_thread.assert_not_awaited()
+    interaction.followup.send.assert_awaited_once()
+    assert "Nothing to translate" in interaction.followup.send.call_args.args[0]
