@@ -17,6 +17,9 @@ poetry.lock
 .env
 .env.*.local
 
+# Bot runtime data (per-user language preferences)
+data/
+
 # Logs
 logs
 *.log

@@ -1,6 +1,6 @@
 # 🔒 Security Policy
 
-Security Policy for **GitHub CICD Template** repository includes all required compliance matrix and artifact mapping.
+Security Policy for **polyglot-relay** repository includes all required compliance matrix and artifact mapping.
 
 ## 🧮 Supported Versions
 
@@ -8,8 +8,8 @@ We provide security updates for the following versions of our project:
 
 | Version | Status      | Secure |
 | ------- | ----------- | ------ |
-| 1.0.1   | End-of-life | No     |
-| >1.0.4  | Supported   | Yes    |
+| <1.0.3  | End-of-life | No     |
+| >=1.0.3 | Supported   | Yes    |
 
 ## 🛡️ Security Practices
 

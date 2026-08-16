@@ -5,3 +5,15 @@ build
 Dockerfile
 docker-compose.yml
 README.md
+venv
+.venv
+__pycache__
+*.pyc
+.env
+data
+tests
+.pytest_cache
+.mypy_cache
+htmlcov
+.coverage
+coverage.xml
