@@ -459,3 +459,56 @@ def test_retry_translation_thread_reports_when_nothing_to_translate(tmp_path, mo
     message.create_thread.assert_not_awaited()
     interaction.followup.send.assert_awaited_once()
     assert "Nothing to translate" in interaction.followup.send.call_args.args[0]
+
+
+def test_chunk_lines_fits_short_lines_in_one_chunk():
+    """Well under Discord's limit -> a single chunk with every line."""
+    lines = ["**es**: hola", "**en**: hello"]
+
+    chunks = bot_main._chunk_lines(lines)
+
+    assert chunks == ["**es**: hola\n**en**: hello"]
+
+
+def test_chunk_lines_splits_when_combined_length_exceeds_the_limit():
+    """Real crash case (Discord error 50035): many languages combined push past 2000 chars."""
+    lines = ["**xx**: " + ("a" * 1900) for _ in range(3)]
+
+    chunks = bot_main._chunk_lines(lines)
+
+    assert len(chunks) > 1
+    for chunk in chunks:
+        assert len(chunk) <= bot_main.DISCORD_MESSAGE_LIMIT
+    # No line was dropped or merged incorrectly across the split.
+    assert sum(chunk.count("**xx**:") for chunk in chunks) == 3
+
+
+def test_chunk_lines_truncates_a_single_line_longer_than_the_limit():
+    """A pathological single translation longer than 2000 chars gets truncated, not dropped."""
+    lines = ["**es**: " + ("a" * 2500)]
+
+    chunks = bot_main._chunk_lines(lines)
+
+    assert len(chunks) == 1
+    assert len(chunks[0]) <= bot_main.DISCORD_MESSAGE_LIMIT
+    assert chunks[0].endswith("…")
+
+
+def test_on_message_sends_multiple_chunks_when_translations_are_long(tmp_path, monkeypatch):
+    """The real crash scenario: 5 active languages whose combined text exceeds 2000 chars."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    members = []
+    for i, lang in enumerate(("es", "it", "pl", "ru", "fr")):
+        storage.set_user_language(1, 200 + i, lang)
+        members.append(_make_member(1, 200 + i))
+    channel = _make_channel(members=members)
+    message = _make_message(100, content="hello", channel=channel)
+    long_text = "a" * 900
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=(long_text, "en")))
+
+    asyncio.run(bot_main.on_message(message))  # must not raise
+
+    thread = message.create_thread.return_value
+    assert thread.send.await_count > 1
+    for call in thread.send.call_args_list:
+        assert len(call.args[0]) <= bot_main.DISCORD_MESSAGE_LIMIT

@@ -283,6 +283,30 @@ async def on_ready():
     logger.info("logged in as %s", client.user)
 
 
+DISCORD_MESSAGE_LIMIT = 2000
+
+
+def _chunk_lines(lines: list[str]) -> list[str]:
+    """Pack lines into <=2000-char chunks (Discord's message limit) without splitting a line."""
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for line in lines:
+        if len(line) > DISCORD_MESSAGE_LIMIT:
+            line = line[: DISCORD_MESSAGE_LIMIT - 1] + "…"
+        added_len = len(line) + (1 if current else 0)
+        if current and current_len + added_len > DISCORD_MESSAGE_LIMIT:
+            chunks.append("\n".join(current))
+            current = [line]
+            current_len = len(line)
+        else:
+            current.append(line)
+            current_len += added_len
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
 async def _translate_to_thread(message: discord.Message) -> str:
     """Core auto-translate logic: shared by on_message and the admin retry command.
 
@@ -320,7 +344,8 @@ async def _translate_to_thread(message: discord.Message) -> str:
 
     try:
         thread = await message.create_thread(name="🌐 Translation", auto_archive_duration=1440)
-        await thread.send("\n".join(lines))
+        for chunk in _chunk_lines(lines):
+            await thread.send(chunk)
     except discord.HTTPException:
         logger.exception("failed to create/post translation thread")
         return "Failed to create the thread (it may already have one, or I lack permission)."
