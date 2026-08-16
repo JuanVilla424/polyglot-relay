@@ -132,9 +132,12 @@ Setting up a Python virtual environment ensures that dependencies are managed ef
 ### 🐳 Running the Bot
 
 ```bash
-cp .env.template .env   # fill in DISCORD_BOT_TOKEN
+cp .env.template .env      # fill in DISCORD_BOT_TOKEN
+mkdir -p data && chmod 777 data   # bot runs as a non-root user, needs write access to the bind mount
 docker compose up -d
 ```
+
+The `mkdir`/`chmod` step matters: if Docker auto-creates `./data` for you (by skipping it and going straight to `docker compose up`), it comes back owned by `root` and the bot's non-root user gets `PermissionError` writing `user_languages.json` — commands like `/setlanguage` fail with "The application did not respond" in Discord, with the real error only visible via `docker logs polyglot-relay-bot`.
 
 This starts two services: `libretranslate` (the translation engine, with its full language catalog — 50 languages as of v1.9.6, verified via its `/languages` endpoint — reachable only from the `bot` service over the internal Docker network) and `bot` (the Discord bot itself). Language models are downloaded into a persistent volume on first run; expect the first boot to take several minutes and multiple GB of network traffic while `libretranslate` fetches every model, subsequent restarts reuse the volume and start immediately.
 
