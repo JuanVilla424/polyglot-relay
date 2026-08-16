@@ -1,9 +1,12 @@
+from pathlib import Path
+
 import discord
 from discord import app_commands
+from discord.ext import tasks
 
 from app import storage, translator
 from app.config import DISCORD_BOT_TOKEN, LOG_CHANNEL_ID
-from app.lang_codes import to_flores
+from app.lang_codes import ISO_TO_FLORES, to_flores
 from app.logger import logger
 
 intents = discord.Intents.default()
@@ -12,6 +15,14 @@ intents.members = True
 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+
+HEARTBEAT_PATH = Path("/tmp/healthy")
+
+
+@tasks.loop(seconds=30)
+async def _heartbeat() -> None:
+    """Touch a file the Docker healthcheck watches, proving the gateway is alive."""
+    HEARTBEAT_PATH.touch()
 
 
 def _resolve_member_language(member: discord.Member) -> str | None:
@@ -95,6 +106,19 @@ async def setlanguage(interaction: discord.Interaction, code: str):
     )
 
 
+@tree.command(name="clearlanguage", description="Remove your preferred language")
+async def clearlanguage(interaction: discord.Interaction):
+    """Stop auto-translated DMs for the invoking user in this guild."""
+    if interaction.guild_id is None:
+        await interaction.response.send_message(
+            "This command only works inside a server.", ephemeral=True
+        )
+        return
+    storage.clear_user_language(interaction.guild_id, interaction.user.id)
+    await interaction.response.send_message("Your language preference was removed.", ephemeral=True)
+    await _report_language_change(f"🚫 {interaction.user.mention} cleared their language")
+
+
 @tree.command(
     name="setuserlanguage", description="Admin: set another member's translation language"
 )
@@ -123,6 +147,24 @@ async def setuserlanguage(interaction: discord.Interaction, user: discord.Member
 setuserlanguage.error(_admin_command_error)
 
 
+@tree.command(name="clearuserlanguage", description="Admin: remove a member's translation language")
+@app_commands.describe(user="The member to clear")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def clearuserlanguage(interaction: discord.Interaction, user: discord.Member):
+    """Let an admin remove another member's explicit language."""
+    storage.clear_user_language(user.guild.id, user.id)
+    await interaction.response.send_message(
+        f"Language for {user.mention} was removed.", ephemeral=True
+    )
+    await _report_language_change(
+        f"🚫 {interaction.user.mention} cleared {user.mention}'s language"
+    )
+
+
+clearuserlanguage.error(_admin_command_error)
+
+
 @tree.command(name="setrolelanguage", description="Admin: assign a translation language to a role")
 @app_commands.describe(role="The role to configure", code="Language code, e.g. es, en, fr")
 @app_commands.default_permissions(manage_guild=True)
@@ -149,6 +191,31 @@ async def setrolelanguage(interaction: discord.Interaction, role: discord.Role, 
 
 
 setrolelanguage.error(_admin_command_error)
+
+
+@tree.command(name="clearrolelanguage", description="Admin: remove a role's translation language")
+@app_commands.describe(role="The role to clear")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def clearrolelanguage(interaction: discord.Interaction, role: discord.Role):
+    """Let an admin remove a role's language mapping."""
+    storage.clear_role_language(role.guild.id, role.id)
+    await interaction.response.send_message(
+        f"Language mapping for {role.mention} was removed.", ephemeral=True
+    )
+    await _report_language_change(
+        f"🚫 {interaction.user.mention} cleared {role.mention}'s language"
+    )
+
+
+clearrolelanguage.error(_admin_command_error)
+
+
+@tree.command(name="languages", description="List the language codes this bot supports")
+async def languages(interaction: discord.Interaction):
+    """Show every ISO 639-1 code mapped in app/lang_codes.py."""
+    codes = ", ".join(f"`{code}`" for code in sorted(ISO_TO_FLORES))
+    await interaction.response.send_message(f"Supported language codes: {codes}", ephemeral=True)
 
 
 @tree.context_menu(name="Translate Message")
@@ -186,6 +253,8 @@ async def translate_message(interaction: discord.Interaction, message: discord.M
 async def on_ready():
     """Sync application commands with Discord once the client is logged in."""
     await tree.sync()
+    if not _heartbeat.is_running():
+        _heartbeat.start()
     logger.info("logged in as %s", client.user)
 
 

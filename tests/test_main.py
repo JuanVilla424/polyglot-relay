@@ -23,6 +23,18 @@ def _make_member(guild_id, user_id, role_ids=()):
     return member
 
 
+def _make_message(guild_id, author_id, content="hello", author_is_bot=False):
+    message = MagicMock()
+    message.author.id = author_id
+    message.author.bot = author_is_bot
+    message.author.display_name = "Author"
+    message.guild.id = guild_id
+    message.guild.members = []
+    message.content = content
+    message.channel.name = "general"
+    return message
+
+
 def test_intents_enable_message_content():
     """Auto-translate needs the privileged message content intent enabled."""
     assert bot_main.intents.message_content is True
@@ -197,3 +209,114 @@ def test_report_language_change_swallows_send_failures(monkeypatch):
     monkeypatch.setattr(bot_main.client, "get_channel", MagicMock(return_value=channel))
 
     asyncio.run(bot_main._report_language_change("hello"))  # must not raise
+
+
+def test_clearlanguage_removes_stored_preference(tmp_path, monkeypatch):
+    """Clearing removes a previously stored self-service preference."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 100, "es")
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.user.id = 100
+    interaction.response.send_message = AsyncMock()
+
+    asyncio.run(bot_main.clearlanguage.callback(interaction))
+
+    assert storage.get_user_language(1, 100) is None
+
+
+def test_clearuserlanguage_removes_target_member(tmp_path, monkeypatch):
+    """An admin can remove another member's stored language."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 100, "es")
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    target = _make_member(1, 100)
+
+    asyncio.run(bot_main.clearuserlanguage.callback(interaction, target))
+
+    assert storage.get_user_language(1, 100) is None
+
+
+def test_clearrolelanguage_removes_role_mapping(tmp_path, monkeypatch):
+    """An admin can remove a role's language mapping."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_role_language(1, 10, "fr")
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    role = MagicMock()
+    role.id = 10
+    role.guild.id = 1
+
+    asyncio.run(bot_main.clearrolelanguage.callback(interaction, role))
+
+    assert storage.get_role_language(1, 10) is None
+
+
+def test_languages_command_lists_known_codes():
+    """The /languages command surfaces the actual supported codes."""
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+
+    asyncio.run(bot_main.languages.callback(interaction))
+
+    sent = interaction.response.send_message.call_args.args[0]
+    assert "`es`" in sent
+    assert "`en`" in sent
+
+
+def test_on_message_ignores_bot_authors(tmp_path, monkeypatch):
+    """Messages from other bots never trigger auto-translate."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    message = _make_message(1, 100, author_is_bot=True)
+    translate_mock = AsyncMock()
+    monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
+
+    asyncio.run(bot_main.on_message(message))
+
+    translate_mock.assert_not_awaited()
+
+
+def test_on_message_dms_recipient_with_translation(tmp_path, monkeypatch):
+    """A recipient with a configured language gets a DM with the translation."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 200, "es")
+    message = _make_message(1, 100, content="hello")
+    recipient = MagicMock()
+    recipient.send = AsyncMock()
+    monkeypatch.setattr(bot_main.client, "get_user", MagicMock(return_value=recipient))
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
+
+    asyncio.run(bot_main.on_message(message))
+
+    recipient.send.assert_awaited_once()
+    assert "hola" in recipient.send.call_args.args[0]
+
+
+def test_on_message_skips_dm_when_already_target_language(tmp_path, monkeypatch):
+    """No DM noise when the detected language already matches the recipient's."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 200, "en")
+    message = _make_message(1, 100, content="hello")
+    recipient = MagicMock()
+    recipient.send = AsyncMock()
+    monkeypatch.setattr(bot_main.client, "get_user", MagicMock(return_value=recipient))
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hello", "en")))
+
+    asyncio.run(bot_main.on_message(message))
+
+    recipient.send.assert_not_awaited()
+
+
+def test_on_message_handles_forbidden_dm_gracefully(tmp_path, monkeypatch):
+    """A recipient with closed DMs doesn't break processing for anyone else."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 200, "es")
+    message = _make_message(1, 100, content="hello")
+    response = MagicMock(status=403, reason="Forbidden")
+    recipient = MagicMock()
+    recipient.send = AsyncMock(side_effect=discord.Forbidden(response, "cannot send"))
+    monkeypatch.setattr(bot_main.client, "get_user", MagicMock(return_value=recipient))
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
+
+    asyncio.run(bot_main.on_message(message))  # must not raise

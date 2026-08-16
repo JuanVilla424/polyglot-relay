@@ -134,13 +134,12 @@ Setting up a Python virtual environment ensures that dependencies are managed ef
 
 ```bash
 cp .env.template .env      # fill in DISCORD_BOT_TOKEN
-mkdir -p data && chmod 777 data   # bot runs as a non-root user, needs write access to the bind mount
 docker compose up -d
 ```
 
-The `mkdir`/`chmod` step matters: if Docker auto-creates `./data` for you (by skipping it and going straight to `docker compose up`), it comes back owned by `root` and the bot's non-root user gets `PermissionError` writing `user_languages.json` — commands like `/setlanguage` fail with "The application did not respond" in Discord, with the real error only visible via `docker logs polyglot-relay-bot`.
+This starts three services, none exposed outside the internal Docker network: `libretranslate` (language detection only — 50 languages as of v1.9.6), `nllb` (translation, via a self-hosted NLLB-200 distilled-600M model converted from Meta's official weights the first time it's needed), and `bot`. `libretranslate` downloads its models on first run (several minutes, multiple GB); `nllb` converts its model lazily on the first real translation request instead of at startup, so the very first translation after a fresh deploy is noticeably slower than the rest — all three (including the bot's own `data/user_languages.json`/`role_languages.json`) live in named Docker volumes, which inherit the right ownership from each image automatically (no host-side `chmod` needed) and persist across restarts. All three services have healthchecks; the bot's works via a heartbeat file (`/tmp/healthy`, touched every 30s while the gateway connection is alive) since it isn't an HTTP service.
 
-This starts three services, none exposed outside the internal Docker network: `libretranslate` (language detection only — 50 languages as of v1.9.6), `nllb` (translation, via a self-hosted NLLB-200 distilled-600M model converted from Meta's official weights the first time it's needed), and `bot`. `libretranslate` downloads its models on first run (several minutes, multiple GB); `nllb` converts its model lazily on the first real translation request instead of at startup, so the very first translation after a fresh deploy is noticeably slower than the rest — both are cached in Docker volumes afterward and start immediately on restart.
+If you're upgrading from an older deploy that used a `./data` bind mount, migrate the existing JSON files into the named volume before recreating the container: `docker run --rm -v ./data:/src:ro -v polyglot-relay_polyglot-relay-data:/dst alpine sh -c "cp /src/*.json /dst/ && chown -R 1000:1000 /dst"`.
 
 Language coverage for translation is limited to the languages mapped in `app/lang_codes.py` (curated common languages, not the full FLORES-200/200-language set) — `/setlanguage` with an unmapped code fails with a clear error instead of mistranslating.
 
@@ -175,10 +174,14 @@ pre-commit run --all-files
 ### Bot Commands
 
 - **`/setlanguage <code>`**: set your own preferred language (e.g. `es`, `en`, `fr`). Required before you receive any DM translations, unless a role already covers you (see below).
+- **`/clearlanguage`**: remove your own preferred language.
 - **`/setuserlanguage <member> <code>`** _(admin, Manage Server permission)_: set someone else's language for them — for people who won't run the command themselves.
+- **`/clearuserlanguage <member>`** _(admin)_: remove another member's explicit language.
 - **`/setrolelanguage <role> <code>`** _(admin, Manage Server permission)_: any member with that role gets DM translations in that language by default. An explicit `/setlanguage`/`/setuserlanguage` for that person always overrides their role.
+- **`/clearrolelanguage <role>`** _(admin)_: remove a role's language mapping.
+- **`/languages`**: list every language code the bot currently supports.
 - **Right-click a message → Apps → Translate Message**: on-demand ephemeral translation of that one message, visible only to you, regardless of whether you've set a language.
-- **Automatic DMs**: once a member has a language — explicit or via role — every new message from other members (in a channel the bot can read) that isn't already in their language is translated and DMed to them. Members with neither an explicit language nor a mapped role receive nothing — no language is guessed on their behalf. In very active channels this can mean a lot of DMs; there's no throttling by default.
+- **Automatic DMs**: once a member has a language — explicit or via role — every new message from other members (in a channel the bot can read) that isn't already in their language is translated and DMed to them. Members with neither an explicit language nor a mapped role receive nothing — no language is guessed on their behalf. In very active channels this can mean a lot of DMs; there's no per-user throttling, but translation requests to the `nllb` service are capped at 2 concurrent in-flight calls to avoid saturating it during a burst.
 
 ### CI/CD Pipeline
 

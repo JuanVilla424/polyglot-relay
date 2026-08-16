@@ -1,7 +1,13 @@
+import asyncio
+
 import httpx
 
 from app.config import LIBRETRANSLATE_URL, NLLB_URL
 from app.lang_codes import to_flores
+
+# NLLB inference is CPU-bound and single-instance; cap how many translate
+# requests hit it at once so a burst of messages can't starve the container.
+_NLLB_CONCURRENCY = asyncio.Semaphore(2)
 
 
 class UnsupportedLanguageError(Exception):
@@ -34,13 +40,14 @@ async def translate(text: str, target_lang: str) -> tuple[str, str]:
             f"no FLORES-200 mapping for source={detected!r} or target={target_lang!r}"
         )
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            f"{NLLB_URL}/translate",
-            json={"q": text, "source": source_flores, "target": target_flores},
-        )
-        response.raise_for_status()
-        return response.json()["translatedText"], detected
+    async with _NLLB_CONCURRENCY:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{NLLB_URL}/translate",
+                json={"q": text, "source": source_flores, "target": target_flores},
+            )
+            response.raise_for_status()
+            return response.json()["translatedText"], detected
 
 
 async def list_languages() -> list[dict]:

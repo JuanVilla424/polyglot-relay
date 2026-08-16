@@ -24,6 +24,10 @@ Please note that all participants in our project are expected to follow our [Cod
 
    pytest
 
+   Changes under `nllb/` need its own venv (heavy ML deps: ctranslate2/transformers/torch, kept separate from the bot's):
+
+   cd nllb && python -m venv venv && source venv/bin/activate && pip install -r requirements.txt -r requirements-dev.txt && pytest
+
 5. **Commit your changes**:
    Use meaningful commit messages that explain what you have done:
 

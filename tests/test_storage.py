@@ -51,3 +51,36 @@ def test_role_languages_round_trip_and_isolate_by_guild(tmp_path, monkeypatch):
     assert storage.guild_role_languages(2) == {30: "fr"}
     # User and role stores don't collide even with overlapping guild/id numbers.
     assert storage.guild_user_languages(1) == {}
+
+
+def test_clear_user_language_removes_only_that_entry(tmp_path, monkeypatch):
+    """Clearing one user's language leaves everyone else untouched."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 100, "es")
+    storage.set_user_language(1, 200, "en")
+
+    storage.clear_user_language(1, 100)
+
+    assert storage.get_user_language(1, 100) is None
+    assert storage.get_user_language(1, 200) == "en"
+
+
+def test_clear_user_language_is_a_noop_when_unset(tmp_path, monkeypatch):
+    """Clearing a language that was never set doesn't raise."""
+    _use_tmp_store(tmp_path, monkeypatch)
+
+    storage.clear_user_language(1, 100)  # must not raise
+
+    assert storage.get_user_language(1, 100) is None
+
+
+def test_clear_role_language_removes_only_that_entry(tmp_path, monkeypatch):
+    """Clearing one role's language leaves other roles untouched."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_role_language(1, 10, "es")
+    storage.set_role_language(1, 20, "en")
+
+    storage.clear_role_language(1, 10)
+
+    assert storage.get_role_language(1, 10) is None
+    assert storage.get_role_language(1, 20) == "en"

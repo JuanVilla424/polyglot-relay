@@ -21,6 +21,12 @@ services:
     restart: always
     expose:
       - "8000"
+    healthcheck:
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 10s
+      timeout: 4s
+      retries: 4
+      start_period: 5s
     volumes:
       - nllb-model:/models
 
@@ -32,15 +38,22 @@ services:
       libretranslate:
         condition: service_healthy
       nllb:
-        condition: service_started
+        condition: service_healthy
     env_file:
       - .env
     environment:
       - LIBRETRANSLATE_URL=http://libretranslate:5000
       - NLLB_URL=http://nllb:8000
+    healthcheck:
+      test: ["CMD-SHELL", "find /tmp/healthy -mmin -1 | grep -q ."]
+      interval: 15s
+      timeout: 4s
+      retries: 4
+      start_period: 15s
     volumes:
-      - ./data:/app/data
+      - polyglot-relay-data:/app/data
 
 volumes:
   libretranslate-models:
   nllb-model:
+  polyglot-relay-data:

@@ -20,6 +20,11 @@ def set_user_language(guild_id: int, user_id: int, language_code: str) -> None:
     _write(USER_LANGUAGES_PATH, data)
 
 
+def clear_user_language(guild_id: int, user_id: int) -> None:
+    """Remove the user's language for this guild, if any was set."""
+    _clear(USER_LANGUAGES_PATH, _key(guild_id, user_id))
+
+
 def guild_user_languages(guild_id: int) -> dict[int, str]:
     """Return {user_id: language_code} for every user opted in on this guild."""
     return _guild_entries(USER_LANGUAGES_PATH, guild_id)
@@ -37,9 +42,21 @@ def set_role_language(guild_id: int, role_id: int, language_code: str) -> None:
     _write(ROLE_LANGUAGES_PATH, data)
 
 
+def clear_role_language(guild_id: int, role_id: int) -> None:
+    """Remove the role's language mapping for this guild, if any was set."""
+    _clear(ROLE_LANGUAGES_PATH, _key(guild_id, role_id))
+
+
 def guild_role_languages(guild_id: int) -> dict[int, str]:
     """Return {role_id: language_code} for every role mapped on this guild."""
     return _guild_entries(ROLE_LANGUAGES_PATH, guild_id)
+
+
+def _clear(path: Path, key: str) -> None:
+    data = _read(path)
+    if key in data:
+        del data[key]
+        _write(path, data)
 
 
 def _guild_entries(path: Path, guild_id: int) -> dict[int, str]:

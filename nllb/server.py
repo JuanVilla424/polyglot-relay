@@ -1,3 +1,5 @@
+"""Self-hosted NLLB-200 translation service, served over a small REST API."""
+
 import threading
 from pathlib import Path
 
@@ -44,12 +46,16 @@ def _get_tokenizer(src_lang: str) -> transformers.PreTrainedTokenizerBase:
 
 
 class TranslateRequest(BaseModel):
+    """Body for POST /translate: text plus explicit FLORES-200 source/target codes."""
+
     q: str
     source: str
     target: str
 
 
 class TranslateResponse(BaseModel):
+    """Body returned by POST /translate."""
+
     translatedText: str
 
 

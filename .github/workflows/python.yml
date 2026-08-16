@@ -34,3 +34,7 @@ jobs:
         run: |
           source venv/bin/activate
           pylint $(git ls-files '*.py' | grep -v '^nllb/')
+      - name: Run tests with Pytest
+        run: |
+          source venv/bin/activate
+          pytest
