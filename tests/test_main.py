@@ -14,6 +14,7 @@ def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "USER_LANGUAGES_PATH", tmp_path / "user_languages.json")
     monkeypatch.setattr(storage, "ROLE_LANGUAGES_PATH", tmp_path / "role_languages.json")
     monkeypatch.setattr(storage, "SERVER_LANGUAGE_PATH", tmp_path / "server_language.json")
+    monkeypatch.setattr(storage, "DELIVERY_MODE_PATH", tmp_path / "delivery_mode.json")
 
 
 def _make_member(guild_id, user_id, role_ids=()):
@@ -49,6 +50,7 @@ def _make_message(author_id, content="hello", author_is_bot=False, channel=None)
     message.channel = channel if channel is not None else _make_channel()
     message.guild = message.channel.guild
     message.reply = AsyncMock()
+    message.create_thread = AsyncMock()
     return message
 
 
@@ -72,6 +74,8 @@ def test_commands_are_registered():
     assert "setrolelanguage" in names
     assert "setserverlanguage" in names
     assert "clearserverlanguage" in names
+    assert "setbehavior" in names
+    assert "clearbehavior" in names
     assert "languages" in names
     assert "help" in names
     assert "Translate Message" in names
@@ -154,6 +158,19 @@ def test_setserverlanguage_rejects_unsupported_code(tmp_path, monkeypatch):
 
     interaction.response.send_message.assert_awaited_once()
     assert storage.get_server_language(1) is None
+
+
+def test_setbehavior_stores_for_guild(tmp_path, monkeypatch):
+    """An admin can choose reply-in-channel or thread delivery for the server."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.response.send_message = AsyncMock()
+    mode = discord.app_commands.Choice(name="Open a thread", value="thread")
+
+    asyncio.run(bot_main.setbehavior.callback(interaction, mode))
+
+    assert storage.get_delivery_mode(1) == "thread"
 
 
 def test_admin_command_error_reports_missing_permissions():
@@ -333,6 +350,19 @@ def test_clearserverlanguage_resets_to_default(tmp_path, monkeypatch):
     assert storage.get_server_language(1) is None
 
 
+def test_clearbehavior_resets_to_default(tmp_path, monkeypatch):
+    """An admin can drop the guild's delivery override and go back to the default."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "thread")
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.response.send_message = AsyncMock()
+
+    asyncio.run(bot_main.clearbehavior.callback(interaction))
+
+    assert storage.get_delivery_mode(1) is None
+
+
 def test_languages_command_lists_known_codes():
     """The /languages command surfaces codes together with their language name."""
     interaction = MagicMock()
@@ -363,6 +393,8 @@ def test_help_command_lists_every_command():
         "/clearrolelanguage",
         "/setserverlanguage",
         "/clearserverlanguage",
+        "/setbehavior",
+        "/clearbehavior",
     ):
         assert command in sent
 
@@ -396,6 +428,28 @@ def test_on_message_replies_with_combined_translations(tmp_path, monkeypatch):
     assert len(sent_embeds) == 1
     assert sent_embeds[0].title.startswith("es")
     assert sent_embeds[0].description == "hola"
+
+
+def test_on_message_uses_thread_when_guild_configured_for_it(tmp_path, monkeypatch):
+    """A guild set to thread mode via /setbehavior gets a thread, not a reply."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 200, "es")
+    storage.set_delivery_mode(1, "thread")
+    member = _make_member(1, 200)
+    channel = _make_channel(members=[member])
+    message = _make_message(100, content="hello", channel=channel)
+    message.guild.id = 1
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
+
+    asyncio.run(bot_main.on_message(message))
+
+    message.reply.assert_not_awaited()
+    message.create_thread.assert_awaited_once()
+    thread = message.create_thread.return_value
+    thread.send.assert_awaited_once()
+    sent_embeds = thread.send.call_args.kwargs["embeds"]
+    assert len(sent_embeds) == 1
+    assert sent_embeds[0].title.startswith("es")
 
 
 def test_on_message_no_reply_when_detected_already_matches(tmp_path, monkeypatch):

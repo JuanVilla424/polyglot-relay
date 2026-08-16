@@ -6,6 +6,7 @@ def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "USER_LANGUAGES_PATH", tmp_path / "user_languages.json")
     monkeypatch.setattr(storage, "ROLE_LANGUAGES_PATH", tmp_path / "role_languages.json")
     monkeypatch.setattr(storage, "SERVER_LANGUAGE_PATH", tmp_path / "server_language.json")
+    monkeypatch.setattr(storage, "DELIVERY_MODE_PATH", tmp_path / "delivery_mode.json")
 
 
 def test_get_user_language_missing_file_returns_none(tmp_path, monkeypatch):
@@ -124,3 +125,42 @@ def test_clear_server_language_is_a_noop_when_unset(tmp_path, monkeypatch):
     storage.clear_server_language(1)  # must not raise
 
     assert storage.get_server_language(1) is None
+
+
+def test_get_delivery_mode_missing_returns_none(tmp_path, monkeypatch):
+    """No override stored yet -> lookup returns None instead of raising."""
+    _use_tmp_store(tmp_path, monkeypatch)
+
+    assert storage.get_delivery_mode(1) is None
+
+
+def test_delivery_mode_round_trip_and_isolates_by_guild(tmp_path, monkeypatch):
+    """A stored delivery-mode override persists and stays scoped to its guild."""
+    _use_tmp_store(tmp_path, monkeypatch)
+
+    storage.set_delivery_mode(1, "thread")
+    storage.set_delivery_mode(2, "reply")
+
+    assert storage.get_delivery_mode(1) == "thread"
+    assert storage.get_delivery_mode(2) == "reply"
+
+
+def test_clear_delivery_mode_removes_only_that_guild(tmp_path, monkeypatch):
+    """Clearing one guild's override leaves other guilds untouched."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "thread")
+    storage.set_delivery_mode(2, "reply")
+
+    storage.clear_delivery_mode(1)
+
+    assert storage.get_delivery_mode(1) is None
+    assert storage.get_delivery_mode(2) == "reply"
+
+
+def test_clear_delivery_mode_is_a_noop_when_unset(tmp_path, monkeypatch):
+    """Clearing a delivery mode that was never set doesn't raise."""
+    _use_tmp_store(tmp_path, monkeypatch)
+
+    storage.clear_delivery_mode(1)  # must not raise
+
+    assert storage.get_delivery_mode(1) is None

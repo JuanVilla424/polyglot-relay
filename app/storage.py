@@ -1,7 +1,13 @@
 import json
 from pathlib import Path
 
-from app.config import DATA_DIR, ROLE_LANGUAGES_PATH, SERVER_LANGUAGE_PATH, USER_LANGUAGES_PATH
+from app.config import (
+    DATA_DIR,
+    DELIVERY_MODE_PATH,
+    ROLE_LANGUAGES_PATH,
+    SERVER_LANGUAGE_PATH,
+    USER_LANGUAGES_PATH,
+)
 
 
 def _key(guild_id: int, entity_id: int) -> str:
@@ -67,6 +73,23 @@ def set_server_language(guild_id: int, language_code: str) -> None:
 def clear_server_language(guild_id: int) -> None:
     """Remove the guild's fallback language override, if any was set."""
     _clear(SERVER_LANGUAGE_PATH, str(guild_id))
+
+
+def get_delivery_mode(guild_id: int) -> str | None:
+    """Return the guild's configured translation delivery mode, if an admin set one."""
+    return _read(DELIVERY_MODE_PATH).get(str(guild_id))
+
+
+def set_delivery_mode(guild_id: int, mode: str) -> None:
+    """Persist the guild's translation delivery mode, overriding the built-in default."""
+    data = _read(DELIVERY_MODE_PATH)
+    data[str(guild_id)] = mode
+    _write(DELIVERY_MODE_PATH, data)
+
+
+def clear_delivery_mode(guild_id: int) -> None:
+    """Remove the guild's delivery mode override, if any was set."""
+    _clear(DELIVERY_MODE_PATH, str(guild_id))
 
 
 def _clear(path: Path, key: str) -> None:

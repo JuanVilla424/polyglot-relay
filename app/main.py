@@ -23,6 +23,10 @@ HEARTBEAT_PATH = Path("/tmp/healthy")
 # this per guild with /setserverlanguage; this is only the built-in fallback.
 DEFAULT_SERVER_LANGUAGE = "en"
 
+# How translations get posted: a native reply in-channel, or a thread on the
+# original message. An admin can override this per guild with /setbehavior.
+DEFAULT_DELIVERY_MODE = "reply"
+
 
 @tasks.loop(seconds=30)
 async def _heartbeat() -> None:
@@ -84,7 +88,9 @@ async def _admin_command_error(
     await interaction.response.send_message("Something went wrong.", ephemeral=True)
 
 
-@tree.command(name="setlanguage", description="Set your preferred language for auto-translated DMs")
+@tree.command(
+    name="setlanguage", description="Set your preferred language for auto-translated replies"
+)
 @app_commands.describe(code="Language code, e.g. es, en, fr")
 async def setlanguage(interaction: discord.Interaction, code: str):
     """Store the invoking user's preferred language for this guild."""
@@ -103,7 +109,7 @@ async def setlanguage(interaction: discord.Interaction, code: str):
         return
     storage.set_user_language(interaction.guild_id, interaction.user.id, code.lower())
     await interaction.response.send_message(
-        f"Language set to `{code.lower()}`. You'll get DMs with translations from now on.",
+        f"Language set to `{code.lower()}`. You'll be included in translation replies from now on.",
         ephemeral=True,
     )
     await _report_language_change(
@@ -113,7 +119,7 @@ async def setlanguage(interaction: discord.Interaction, code: str):
 
 @tree.command(name="clearlanguage", description="Remove your preferred language")
 async def clearlanguage(interaction: discord.Interaction):
-    """Stop auto-translated DMs for the invoking user in this guild."""
+    """Stop auto-translated replies for the invoking user in this guild."""
     if interaction.guild_id is None:
         await interaction.response.send_message(
             "This command only works inside a server.", ephemeral=True
@@ -274,6 +280,64 @@ async def clearserverlanguage(interaction: discord.Interaction):
 clearserverlanguage.error(_admin_command_error)
 
 
+@tree.command(
+    name="setbehavior",
+    description="Admin: choose how translations are delivered in this server",
+)
+@app_commands.describe(mode="Reply inline in the channel, or open a thread")
+@app_commands.choices(
+    mode=[
+        app_commands.Choice(name="Reply in the channel (default)", value="reply"),
+        app_commands.Choice(name="Open a thread", value="thread"),
+    ]
+)
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def setbehavior(interaction: discord.Interaction, mode: app_commands.Choice[str]):
+    """Let an admin pick reply-in-channel or thread delivery for this guild."""
+    if interaction.guild_id is None:
+        await interaction.response.send_message(
+            "This command only works inside a server.", ephemeral=True
+        )
+        return
+    storage.set_delivery_mode(interaction.guild_id, mode.value)
+    await interaction.response.send_message(
+        f"Translation delivery set to **{mode.name}**.", ephemeral=True
+    )
+    await _report_language_change(
+        f"🌐 {interaction.user.mention} set translation delivery to `{mode.value}`"
+    )
+
+
+setbehavior.error(_admin_command_error)
+
+
+@tree.command(
+    name="clearbehavior",
+    description=f"Admin: reset translation delivery to the default ({DEFAULT_DELIVERY_MODE})",
+)
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def clearbehavior(interaction: discord.Interaction):
+    """Let an admin drop the guild's delivery override and go back to the default."""
+    if interaction.guild_id is None:
+        await interaction.response.send_message(
+            "This command only works inside a server.", ephemeral=True
+        )
+        return
+    storage.clear_delivery_mode(interaction.guild_id)
+    await interaction.response.send_message(
+        f"Translation delivery reset to the default (`{DEFAULT_DELIVERY_MODE}`).",
+        ephemeral=True,
+    )
+    await _report_language_change(
+        f"🚫 {interaction.user.mention} cleared the translation delivery mode"
+    )
+
+
+clearbehavior.error(_admin_command_error)
+
+
 @tree.command(name="languages", description="List the language codes this bot supports")
 async def languages(interaction: discord.Interaction):
     """Show every ISO 639-1 code mapped in app/lang_codes.py, with its language name."""
@@ -288,7 +352,7 @@ async def help_command(interaction: discord.Interaction):
     """Summarize every command in one place instead of relying on Discord's picker."""
     lines = [
         "**For yourself**",
-        "`/setlanguage <code>` — set your language for auto-translated DMs",
+        "`/setlanguage <code>` — set your language for auto-translated replies",
         "`/clearlanguage` — remove your language",
         "`/languages` — list every supported language code",
         'Right-click a message → Apps → "Translate Message" — one-off translation, works for anyone',
@@ -300,6 +364,8 @@ async def help_command(interaction: discord.Interaction):
         "`/clearrolelanguage <role>` — remove a role's language mapping",
         "`/setserverlanguage <code>` — set this server's fallback translation language",
         "`/clearserverlanguage` — reset the server's fallback language to the default",
+        "`/setbehavior <mode>` — choose reply-in-channel or thread delivery for this server",
+        "`/clearbehavior` — reset translation delivery to the default (reply)",
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
@@ -379,7 +445,35 @@ def _chunk_embeds(embeds: list[discord.Embed]) -> list[list[discord.Embed]]:
     return chunks
 
 
-async def _translate_and_reply(message: discord.Message) -> str:
+async def _deliver_as_reply(message: discord.Message, embeds: list[discord.Embed]) -> str:
+    """Post the translation as a native reply in the same channel."""
+    try:
+        for batch in _chunk_embeds(embeds):
+            await message.reply(embeds=batch, mention_author=False)
+    except discord.HTTPException:
+        logger.exception("failed to send translation reply")
+        return "Failed to send the translation (I may lack permission)."
+
+    return "Translation sent."
+
+
+async def _deliver_as_thread(message: discord.Message, embeds: list[discord.Embed]) -> str:
+    """Post the translation in a thread opened on the original message."""
+    try:
+        thread = await message.create_thread(name="🌐 Translation", auto_archive_duration=1440)
+        for batch in _chunk_embeds(embeds):
+            await thread.send(embeds=batch)
+    except discord.HTTPException:
+        logger.exception("failed to create/post translation thread")
+        return "Failed to create the thread (it may already have one, or I lack permission)."
+
+    return "Thread created."
+
+
+_DELIVERY_MODES = {"reply": _deliver_as_reply, "thread": _deliver_as_thread}
+
+
+async def _translate_and_deliver(message: discord.Message) -> str:
     """Core auto-translate logic: shared by on_message and the admin retry command.
 
     Returns a short human-readable status, used by the retry command's response.
@@ -415,22 +509,17 @@ async def _translate_and_reply(message: discord.Message) -> str:
     if not embeds:
         return "Nothing to translate (already matches every active language)."
 
-    try:
-        for batch in _chunk_embeds(embeds):
-            await message.reply(embeds=batch, mention_author=False)
-    except discord.HTTPException:
-        logger.exception("failed to send translation reply")
-        return "Failed to send the translation (I may lack permission)."
-
-    return "Translation sent."
+    mode = storage.get_delivery_mode(message.guild.id) or DEFAULT_DELIVERY_MODE
+    deliver = _DELIVERY_MODES.get(mode, _deliver_as_reply)
+    return await deliver(message, embeds)
 
 
 @client.event
 async def on_message(message: discord.Message):
-    """Reply with the message translated into every language active here."""
+    """Deliver the message translated into every language active here."""
     if message.author.bot or message.guild is None or not message.content:
         return
-    await _translate_and_reply(message)
+    await _translate_and_deliver(message)
 
 
 @tree.context_menu(name="Retry Translation")
@@ -444,7 +533,7 @@ async def retry_translation(interaction: discord.Interaction, message: discord.M
         )
         return
     await interaction.response.defer(ephemeral=True)
-    status = await _translate_and_reply(message)
+    status = await _translate_and_deliver(message)
     await interaction.followup.send(status, ephemeral=True)
 
 
