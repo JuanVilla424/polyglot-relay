@@ -164,3 +164,36 @@ def test_resolve_guild_recipients_merges_roles_and_explicit(tmp_path, monkeypatc
     assert recipients[100] == "fr"
     assert recipients[300] == "de"
     assert recipients[200] == "es"
+
+
+def test_report_language_change_noop_when_unconfigured(monkeypatch):
+    """No LOG_CHANNEL_ID set -> the client is never touched."""
+    monkeypatch.setattr(bot_main, "LOG_CHANNEL_ID", None)
+    monkeypatch.setattr(
+        bot_main.client, "get_channel", MagicMock(side_effect=AssertionError("should not run"))
+    )
+
+    asyncio.run(bot_main._report_language_change("hello"))
+
+
+def test_report_language_change_sends_to_configured_channel(monkeypatch):
+    """A configured channel receives the message verbatim."""
+    monkeypatch.setattr(bot_main, "LOG_CHANNEL_ID", 999)
+    channel = MagicMock()
+    channel.send = AsyncMock()
+    monkeypatch.setattr(bot_main.client, "get_channel", MagicMock(return_value=channel))
+
+    asyncio.run(bot_main._report_language_change("hello"))
+
+    channel.send.assert_awaited_once_with("hello")
+
+
+def test_report_language_change_swallows_send_failures(monkeypatch):
+    """A permission error posting to the log channel never propagates to the caller."""
+    monkeypatch.setattr(bot_main, "LOG_CHANNEL_ID", 999)
+    response = MagicMock(status=403, reason="Forbidden")
+    channel = MagicMock()
+    channel.send = AsyncMock(side_effect=discord.Forbidden(response, "missing permissions"))
+    monkeypatch.setattr(bot_main.client, "get_channel", MagicMock(return_value=channel))
+
+    asyncio.run(bot_main._report_language_change("hello"))  # must not raise

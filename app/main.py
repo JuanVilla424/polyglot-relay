@@ -2,7 +2,7 @@ import discord
 from discord import app_commands
 
 from app import storage, translator
-from app.config import DISCORD_BOT_TOKEN
+from app.config import DISCORD_BOT_TOKEN, LOG_CHANNEL_ID
 from app.lang_codes import to_flores
 from app.logger import logger
 
@@ -40,6 +40,17 @@ def _resolve_guild_recipients(guild: discord.Guild) -> dict[int, str]:
     return recipients
 
 
+async def _report_language_change(message: str) -> None:
+    """Best-effort post to the configured log channel; never breaks the caller."""
+    if LOG_CHANNEL_ID is None:
+        return
+    try:
+        channel = client.get_channel(LOG_CHANNEL_ID) or await client.fetch_channel(LOG_CHANNEL_ID)
+        await channel.send(message)
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
+        logger.warning("could not post to log channel %s", LOG_CHANNEL_ID)
+
+
 async def _admin_command_error(
     interaction: discord.Interaction, error: app_commands.AppCommandError
 ) -> None:
@@ -47,6 +58,10 @@ async def _admin_command_error(
     if isinstance(error, app_commands.MissingPermissions):
         await interaction.response.send_message(
             "You need the Manage Server permission to use this.", ephemeral=True
+        )
+        command_name = interaction.command.name if interaction.command else "?"
+        await _report_language_change(
+            f"⛔ {interaction.user.mention} tried to use `/{command_name}` without permission"
         )
         return
     logger.exception("admin command failed", exc_info=error)
@@ -66,11 +81,17 @@ async def setlanguage(interaction: discord.Interaction, code: str):
         await interaction.response.send_message(
             f"`{code}` isn't a supported language code.", ephemeral=True
         )
+        await _report_language_change(
+            f"⚠️ {interaction.user.mention} tried `{code}` for themselves (not supported)"
+        )
         return
     storage.set_user_language(interaction.guild_id, interaction.user.id, code.lower())
     await interaction.response.send_message(
         f"Language set to `{code.lower()}`. You'll get DMs with translations from now on.",
         ephemeral=True,
+    )
+    await _report_language_change(
+        f"🌐 {interaction.user.mention} set their language to `{code.lower()}`"
     )
 
 
@@ -86,10 +107,16 @@ async def setuserlanguage(interaction: discord.Interaction, user: discord.Member
         await interaction.response.send_message(
             f"`{code}` isn't a supported language code.", ephemeral=True
         )
+        await _report_language_change(
+            f"⚠️ {interaction.user.mention} tried `{code}` for {user.mention} (not supported)"
+        )
         return
     storage.set_user_language(user.guild.id, user.id, code.lower())
     await interaction.response.send_message(
         f"Language for {user.mention} set to `{code.lower()}`.", ephemeral=True
+    )
+    await _report_language_change(
+        f"🌐 {interaction.user.mention} set {user.mention}'s language to `{code.lower()}`"
     )
 
 
@@ -106,12 +133,18 @@ async def setrolelanguage(interaction: discord.Interaction, role: discord.Role, 
         await interaction.response.send_message(
             f"`{code}` isn't a supported language code.", ephemeral=True
         )
+        await _report_language_change(
+            f"⚠️ {interaction.user.mention} tried `{code}` for {role.mention} (not supported)"
+        )
         return
     storage.set_role_language(role.guild.id, role.id, code.lower())
     await interaction.response.send_message(
         f"Members with {role.mention} now default to `{code.lower()}` "
         "unless they set their own language.",
         ephemeral=True,
+    )
+    await _report_language_change(
+        f"🌐 {interaction.user.mention} mapped {role.mention} to `{code.lower()}`"
     )
 
 

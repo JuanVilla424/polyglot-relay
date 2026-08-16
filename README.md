@@ -128,6 +128,7 @@ Setting up a Python virtual environment ensures that dependencies are managed ef
 2. Under **Bot**, click **Reset Token** and copy it into your local `.env` as `DISCORD_BOT_TOKEN` (copy `.env.template` to `.env` first — `.env` is gitignored).
 3. Still under **Bot** → **Privileged Gateway Intents**, enable **Message Content Intent** and **Server Members Intent**. Both toggles work without Discord's app-review process as long as the bot stays under the ~100-server visibility threshold — which is the case for a personal/private-server bot. Members Intent is what lets role-based language auto-DMs (`/setrolelanguage`) enumerate who has which role; it isn't needed for `/setlanguage` or the right-click translate alone.
 4. Under **OAuth2 → URL Generator**, select scopes `bot` and `applications.commands`, and permissions `Send Messages`, `Read Message History`, `Use Application Commands`. Open the generated URL to invite the bot to your server.
+5. _(Optional)_ To get language-command activity (successes and rejected attempts) reported to a channel: enable Discord's **Developer Mode** (User Settings → Advanced), right-click the target channel → **Copy Channel ID**, and set it as `LOG_CHANNEL_ID` in `.env`. The bot needs `Send Messages` permission in that specific channel too.
 
 ### 🐳 Running the Bot
 
