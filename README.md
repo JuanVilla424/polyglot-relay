@@ -9,7 +9,7 @@
 
 **polyglot-relay** is a self-hosted Discord auto-translation bot. It replaces rate-limited SaaS translators (like iTranslator's 10,000 chars/server and 2,000 chars/user free-tier caps, with the full language catalog paywalled behind Premium) with a fully self-hosted pipeline: no character limits, no paywalled languages, and no dependency on a paid third-party translation API. Language detection runs on [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate); the actual translation runs on a self-hosted [NLLB-200](https://github.com/facebookresearch/flores/tree/main/flores200) (Meta) model via [CTranslate2](https://github.com/OpenNMT/CTranslate2) for meaningfully better quality than Argos Translate alone.
 
-Each server member sets their own preferred language once. From then on, every message is translated and delivered to them **privately via DM**, in their language — nothing is posted publicly in the channel. A right-click "Translate Message" command is also available for one-off, on-demand translations.
+Each server member sets their own preferred language once — directly, inherited from a role, or set for them by an admin. From then on, every message gets a **public thread**, in the same channel, with a color-coded translation embed for every language actually active there, plus the server's configured fallback language. A right-click "Translate Message" command is also available for one-off, ephemeral translations.
 
 <img src="https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fwww.pngkey.com%2Fpng%2Ffull%2F178-1787243_github-icon-png.png&f=1&nofb=1&ipt=913bc5d745baa725efe14b20bdf6ca3f91044c2be909e8504cc79f13dc0b1729&ipo=images" width="112" alt="CI/CD">
 
@@ -21,6 +21,7 @@ Each server member sets their own preferred language once. From then on, every m
   - [Installation](#-installation)
   - [Environment Setup](#-environment-setup)
   - [Discord Application Setup](#-discord-application-setup)
+  - [Running the Bot](#-running-the-bot)
   - [Pre-Commit Hooks](#-pre-commit-hooks)
   - [Extra Steps](#-extra-steps)
 - [Usage](#-usage)
@@ -32,7 +33,8 @@ Each server member sets their own preferred language once. From then on, every m
 
 - **No character limits:** self-hosted LibreTranslate, no free-tier caps to hit or vote-to-reset.
 - **Full language catalog:** nothing paywalled behind a premium tier.
-- **Private per-user delivery:** each member gets translations DMed in their own configured language — the channel stays untouched.
+- **In-channel thread delivery:** translations post in a public thread on the original message, one color-coded embed per active language, visible to everyone who can see that channel.
+- **Flexible language configuration:** members set their own language, admins can set it for a specific member, a role, or the whole server as a fallback — an explicit setting always overrides a role default.
 - **On-demand fallback:** right-click any message → Apps → "Translate Message" for a one-off ephemeral translation (no privileged Discord intent needed for this path).
 - **Fully self-hosted:** three Docker services (`libretranslate` for language detection, `nllb` for translation, `bot`), no external translation API or third-party bot dependency.
 - **Automated Version Control:** automatic version bumping, tagging, and promotion across branches (dev → test → prod → main).
@@ -42,11 +44,15 @@ Each server member sets their own preferred language once. From then on, every m
 
 ### 📋 Prerequisites
 
-**Before you begin, ensure you have met the following requirements**:
+**To just run the bot** (self-hosting, no code changes):
+
+- **Git:** Install [Git](https://git-scm.com/) to clone the repository.
+- **Docker + Docker Compose:** runs all three services (`libretranslate`, `nllb`, `bot`) — see [Running the Bot](#-running-the-bot).
+
+**To develop or contribute** _(development only, on top of the above)_:
 
 - **GitHub Account:** You need a GitHub account to use GitHub Actions.
-- **Python 3.12+:** Ensure Python is installed on your local machine.
-- **Git:** Install [Git](https://git-scm.com/) to clone the repository.
+- **Python 3.12+:** for running the test suite and pre-commit hooks locally — the bot itself always runs in Docker, not from this venv.
 - **NVM:** (Optional) Node.js installation environment versions control
 - **Node.js 22.x+**: (Optional) (Required to Push) Used as lint orchestration manager in pre-commit and pre-push
 
@@ -64,6 +70,8 @@ Each server member sets their own preferred language once. From then on, every m
    ```
 
 ### 🔧 Environment Setup
+
+_Development only — running the bot doesn't need this, it always runs in Docker (see [Running the Bot](#-running-the-bot)). This venv is only for running tests or pre-commit hooks locally._
 
 **Mandatory: Setting Up a Python Virtual Environment**
 
@@ -126,7 +134,7 @@ Setting up a Python virtual environment ensures that dependencies are managed ef
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**.
 2. Under **Bot**, click **Reset Token** and copy it into your local `.env` as `DISCORD_BOT_TOKEN` (copy `.env.template` to `.env` first — `.env` is gitignored).
-3. Still under **Bot** → **Privileged Gateway Intents**, enable **Message Content Intent** and **Server Members Intent**. Both toggles work without Discord's app-review process as long as the bot stays under the ~100-server visibility threshold — which is the case for a personal/private-server bot. Members Intent is what lets role-based language auto-DMs (`/setrolelanguage`) enumerate who has which role; it isn't needed for `/setlanguage` or the right-click translate alone.
+3. Still under **Bot** → **Privileged Gateway Intents**, enable **Message Content Intent** and **Server Members Intent**. Both toggles work without Discord's app-review process as long as the bot stays under the ~100-server visibility threshold — which is the case for a personal/private-server bot. Members Intent is what lets role-based language auto-translation (`/setrolelanguage`) enumerate who has which role; it isn't needed for `/setlanguage` or the right-click translate alone.
 4. Under **OAuth2 → URL Generator**, select scopes `bot` and `applications.commands`, and permissions `Send Messages`, `Read Message History`, `Use Application Commands`, `Create Public Threads`, `Send Messages in Threads` (needed for the auto-translation thread — see Bot Commands below). Open the generated URL to invite the bot to your server. If the bot is already invited without the thread permissions, reopening the same invite URL with the updated permission selection re-grants them without duplicating the bot.
 5. _(Optional)_ To get language-command activity (successes and rejected attempts) reported to a channel: enable Discord's **Developer Mode** (User Settings → Advanced), right-click the target channel → **Copy Channel ID**, and set it as `LOG_CHANNEL_ID` in `.env`. The bot needs `Send Messages` permission in that specific channel too.
 
@@ -145,6 +153,8 @@ Language coverage for translation is limited to the languages mapped in `app/lan
 
 ### 🛸 Pre-Commit Hooks
 
+_Development only, for contributors — not needed to run the bot._
+
 **Install and check pre-commit hooks**: MD files changes countermeasures, python format, python lint, yaml format, yaml lint, version control hook, changelog auto-generation
 
 ```bash
@@ -156,6 +166,8 @@ pre-commit run --all-files
 ```
 
 ### 📌 Extra Steps
+
+_Development only — installs `hadolint`, used by the pre-commit Dockerfile-lint hook. Not needed to run the bot._
 
 1. **Docker**:
    - Using MacOs or Linux:
@@ -173,11 +185,11 @@ pre-commit run --all-files
 
 ### Bot Commands
 
-- **`/setlanguage <code>`**: set your own preferred language (e.g. `es`, `en`, `fr`). Required before you receive any DM translations, unless a role already covers you (see below).
+- **`/setlanguage <code>`**: set your own preferred language (e.g. `es`, `en`, `fr`). Required before you're included in any translation threads, unless a role already covers you (see below).
 - **`/clearlanguage`**: remove your own preferred language.
 - **`/setuserlanguage <member> <code>`** _(admin, Manage Server permission)_: set someone else's language for them — for people who won't run the command themselves.
 - **`/clearuserlanguage <member>`** _(admin)_: remove another member's explicit language.
-- **`/setrolelanguage <role> <code>`** _(admin, Manage Server permission)_: any member with that role gets DM translations in that language by default. An explicit `/setlanguage`/`/setuserlanguage` for that person always overrides their role.
+- **`/setrolelanguage <role> <code>`** _(admin, Manage Server permission)_: any member with that role gets included in translation threads in that language by default. An explicit `/setlanguage`/`/setuserlanguage` for that person always overrides their role.
 - **`/clearrolelanguage <role>`** _(admin)_: remove a role's language mapping.
 - **`/setserverlanguage <code>`** _(admin, Manage Server permission)_: set this server's fallback translation language — always included in every translation thread, on top of whatever members/roles have configured. Defaults to English until an admin sets one.
 - **`/clearserverlanguage`** _(admin)_: reset the server's fallback language back to the default (English).
