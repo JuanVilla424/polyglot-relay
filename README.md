@@ -1,17 +1,13 @@
 # 🌐 polyglot-relay
 
-![CI/CD](https://img.shields.io/badge/CI/CD-Pipeline-blue)
-![Python](https://img.shields.io/badge/Python-3776AB?logo=python&logoColor=fff)
-![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)
 ![Build Status](https://github.com/JuanVilla424/polyglot-relay/actions/workflows/ci.yml/badge.svg?branch=main)
+![Python](https://img.shields.io/badge/Python-3.12%2B-blue.svg)
 ![Status](https://img.shields.io/badge/Status-Stable-green.svg)
 ![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)
 
 **polyglot-relay** is a self-hosted Discord auto-translation bot. It replaces rate-limited SaaS translators (like iTranslator's 10,000 chars/server and 2,000 chars/user free-tier caps, with the full language catalog paywalled behind Premium) with a fully self-hosted pipeline: no character limits, no paywalled languages, and no dependency on a paid third-party translation API. Language detection runs on [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate); the actual translation runs on a self-hosted [NLLB-200](https://github.com/facebookresearch/flores/tree/main/flores200) (Meta) model via [CTranslate2](https://github.com/OpenNMT/CTranslate2) for meaningfully better quality than Argos Translate alone.
 
 Each server member sets their own preferred language once — directly, inherited from a role, or set for them by an admin. From then on, every message gets a **public thread**, in the same channel, with a color-coded translation embed for every language actually active there, plus the server's configured fallback language. A right-click "Translate Message" command is also available for one-off, ephemeral translations.
-
-<img src="https://external-content.duckduckgo.com/iu/?u=https%3A%2F%2Fwww.pngkey.com%2Fpng%2Ffull%2F178-1787243_github-icon-png.png&f=1&nofb=1&ipt=913bc5d745baa725efe14b20bdf6ca3f91044c2be909e8504cc79f13dc0b1729&ipo=images" width="112" alt="CI/CD">
 
 ## 📚 Table of Contents
 
