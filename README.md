@@ -126,7 +126,7 @@ Setting up a Python virtual environment ensures that dependencies are managed ef
 
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications) → **New Application**.
 2. Under **Bot**, click **Reset Token** and copy it into your local `.env` as `DISCORD_BOT_TOKEN` (copy `.env.template` to `.env` first — `.env` is gitignored).
-3. Still under **Bot** → **Privileged Gateway Intents**, enable **Message Content Intent**. This toggle works without Discord's app-review process as long as the bot stays under the ~100-server visibility threshold — which is the case for a personal/private-server bot.
+3. Still under **Bot** → **Privileged Gateway Intents**, enable **Message Content Intent** and **Server Members Intent**. Both toggles work without Discord's app-review process as long as the bot stays under the ~100-server visibility threshold — which is the case for a personal/private-server bot. Members Intent is what lets role-based language auto-DMs (`/setrolelanguage`) enumerate who has which role; it isn't needed for `/setlanguage` or the right-click translate alone.
 4. Under **OAuth2 → URL Generator**, select scopes `bot` and `applications.commands`, and permissions `Send Messages`, `Read Message History`, `Use Application Commands`. Open the generated URL to invite the bot to your server.
 
 ### 🐳 Running the Bot
@@ -173,9 +173,11 @@ pre-commit run --all-files
 
 ### Bot Commands
 
-- **`/setlanguage <code>`**: set your own preferred language (e.g. `es`, `en`, `fr`). Required before you receive any DM translations.
+- **`/setlanguage <code>`**: set your own preferred language (e.g. `es`, `en`, `fr`). Required before you receive any DM translations, unless a role already covers you (see below).
+- **`/setuserlanguage <member> <code>`** _(admin, Manage Server permission)_: set someone else's language for them — for people who won't run the command themselves.
+- **`/setrolelanguage <role> <code>`** _(admin, Manage Server permission)_: any member with that role gets DM translations in that language by default. An explicit `/setlanguage`/`/setuserlanguage` for that person always overrides their role.
 - **Right-click a message → Apps → Translate Message**: on-demand ephemeral translation of that one message, visible only to you, regardless of whether you've set a language.
-- **Automatic DMs**: once you've set a language, every new message from other members (in a channel the bot can read) that isn't already in your language is translated and DMed to you. Members who never ran `/setlanguage` receive nothing — no language is guessed on their behalf. In very active channels this can mean a lot of DMs; there's no throttling by default.
+- **Automatic DMs**: once a member has a language — explicit or via role — every new message from other members (in a channel the bot can read) that isn't already in their language is translated and DMed to them. Members with neither an explicit language nor a mapped role receive nothing — no language is guessed on their behalf. In very active channels this can mean a lot of DMs; there's no throttling by default.
 
 ### CI/CD Pipeline
 

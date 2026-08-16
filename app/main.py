@@ -8,9 +8,49 @@ from app.logger import logger
 
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 
 client = discord.Client(intents=intents)
 tree = app_commands.CommandTree(client)
+
+
+def _resolve_member_language(member: discord.Member) -> str | None:
+    """An explicit /setlanguage or /setuserlanguage wins; otherwise fall back to roles."""
+    explicit = storage.get_user_language(member.guild.id, member.id)
+    if explicit:
+        return explicit
+    role_languages = storage.guild_role_languages(member.guild.id)
+    for role in member.roles:
+        if role.id in role_languages:
+            return role_languages[role.id]
+    return None
+
+
+def _resolve_guild_recipients(guild: discord.Guild) -> dict[int, str]:
+    """Every member with an explicit or role-based language, keyed by user id."""
+    recipients: dict[int, str] = {}
+    role_languages = storage.guild_role_languages(guild.id)
+    if role_languages:
+        for member in guild.members:
+            for role in member.roles:
+                if role.id in role_languages:
+                    recipients[member.id] = role_languages[role.id]
+                    break
+    recipients.update(storage.guild_user_languages(guild.id))
+    return recipients
+
+
+async def _admin_command_error(
+    interaction: discord.Interaction, error: app_commands.AppCommandError
+) -> None:
+    """Shared error handler for admin-only commands: clean message, no unhandled traceback."""
+    if isinstance(error, app_commands.MissingPermissions):
+        await interaction.response.send_message(
+            "You need the Manage Server permission to use this.", ephemeral=True
+        )
+        return
+    logger.exception("admin command failed", exc_info=error)
+    await interaction.response.send_message("Something went wrong.", ephemeral=True)
 
 
 @tree.command(name="setlanguage", description="Set your preferred language for auto-translated DMs")
@@ -34,6 +74,50 @@ async def setlanguage(interaction: discord.Interaction, code: str):
     )
 
 
+@tree.command(
+    name="setuserlanguage", description="Admin: set another member's translation language"
+)
+@app_commands.describe(user="The member to configure", code="Language code, e.g. es, en, fr")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def setuserlanguage(interaction: discord.Interaction, user: discord.Member, code: str):
+    """Let an admin set another member's language without them running a command."""
+    if to_flores(code) is None:
+        await interaction.response.send_message(
+            f"`{code}` isn't a supported language code.", ephemeral=True
+        )
+        return
+    storage.set_user_language(user.guild.id, user.id, code.lower())
+    await interaction.response.send_message(
+        f"Language for {user.mention} set to `{code.lower()}`.", ephemeral=True
+    )
+
+
+setuserlanguage.error(_admin_command_error)
+
+
+@tree.command(name="setrolelanguage", description="Admin: assign a translation language to a role")
+@app_commands.describe(role="The role to configure", code="Language code, e.g. es, en, fr")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def setrolelanguage(interaction: discord.Interaction, role: discord.Role, code: str):
+    """Members with this role default to this language unless they set their own."""
+    if to_flores(code) is None:
+        await interaction.response.send_message(
+            f"`{code}` isn't a supported language code.", ephemeral=True
+        )
+        return
+    storage.set_role_language(role.guild.id, role.id, code.lower())
+    await interaction.response.send_message(
+        f"Members with {role.mention} now default to `{code.lower()}` "
+        "unless they set their own language.",
+        ephemeral=True,
+    )
+
+
+setrolelanguage.error(_admin_command_error)
+
+
 @tree.context_menu(name="Translate Message")
 async def translate_message(interaction: discord.Interaction, message: discord.Message):
     """On-demand ephemeral translation, exempt from the message content intent."""
@@ -46,8 +130,8 @@ async def translate_message(interaction: discord.Interaction, message: discord.M
     await interaction.response.defer(ephemeral=True)
 
     target = None
-    if interaction.guild_id is not None:
-        target = storage.get_user_language(interaction.guild_id, interaction.user.id)
+    if isinstance(interaction.user, discord.Member):
+        target = _resolve_member_language(interaction.user)
     target = target or "en"
 
     try:
@@ -74,11 +158,11 @@ async def on_ready():
 
 @client.event
 async def on_message(message: discord.Message):
-    """DM each opted-in guild member a translation, skipping the author."""
+    """DM each opted-in guild member (explicit or role-based) a translation, skipping the author."""
     if message.author.bot or message.guild is None or not message.content:
         return
 
-    recipients = storage.guild_user_languages(message.guild.id)
+    recipients = _resolve_guild_recipients(message.guild)
     recipients.pop(message.author.id, None)
     if not recipients:
         return

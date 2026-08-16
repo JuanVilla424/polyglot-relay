@@ -1,3 +1,5 @@
+# pylint: disable=protected-access
+# White-box tests deliberately reach into main.py's internal helpers.
 import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
@@ -10,6 +12,15 @@ from app import storage
 def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
     monkeypatch.setattr(storage, "USER_LANGUAGES_PATH", tmp_path / "user_languages.json")
+    monkeypatch.setattr(storage, "ROLE_LANGUAGES_PATH", tmp_path / "role_languages.json")
+
+
+def _make_member(guild_id, user_id, role_ids=()):
+    member = MagicMock()
+    member.id = user_id
+    member.guild.id = guild_id
+    member.roles = [MagicMock(id=rid) for rid in role_ids]
+    return member
 
 
 def test_intents_enable_message_content():
@@ -25,9 +36,11 @@ def test_client_and_tree_are_wired():
 
 
 def test_commands_are_registered():
-    """Both the slash command and the context menu command are registered."""
+    """Slash commands and the context menu command are all registered."""
     names = {command.name for command in bot_main.tree.get_commands()}
     assert "setlanguage" in names
+    assert "setuserlanguage" in names
+    assert "setrolelanguage" in names
     assert "Translate Message" in names
 
 
@@ -56,3 +69,98 @@ def test_setlanguage_stores_supported_code(tmp_path, monkeypatch):
     asyncio.run(bot_main.setlanguage.callback(interaction, "ES"))
 
     assert storage.get_user_language(1, 100) == "es"
+
+
+def test_setuserlanguage_stores_for_target_member(tmp_path, monkeypatch):
+    """An admin can set someone else's language on their behalf."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    target = _make_member(1, 100)
+
+    asyncio.run(bot_main.setuserlanguage.callback(interaction, target, "es"))
+
+    assert storage.get_user_language(1, 100) == "es"
+
+
+def test_setrolelanguage_stores_for_role(tmp_path, monkeypatch):
+    """An admin can map a role to a language."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    role = MagicMock()
+    role.id = 10
+    role.guild.id = 1
+
+    asyncio.run(bot_main.setrolelanguage.callback(interaction, role, "fr"))
+
+    assert storage.get_role_language(1, 10) == "fr"
+
+
+def test_admin_command_error_reports_missing_permissions():
+    """A permissions failure gets a clean, specific message."""
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    error = discord.app_commands.MissingPermissions(["manage_guild"])
+
+    asyncio.run(bot_main._admin_command_error(interaction, error))
+
+    interaction.response.send_message.assert_awaited_once()
+    assert "Manage Server" in interaction.response.send_message.call_args.args[0]
+
+
+def test_admin_command_error_reports_generic_failure():
+    """Any other error still gets a response instead of failing silently."""
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+
+    asyncio.run(bot_main._admin_command_error(interaction, RuntimeError("boom")))
+
+    interaction.response.send_message.assert_awaited_once()
+
+
+def test_resolve_member_language_prefers_explicit_over_role(tmp_path, monkeypatch):
+    """An explicit /setlanguage wins even if the member also has a mapped role."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_role_language(1, 10, "fr")
+    storage.set_user_language(1, 100, "es")
+    member = _make_member(1, 100, role_ids=[10])
+
+    assert bot_main._resolve_member_language(member) == "es"
+
+
+def test_resolve_member_language_falls_back_to_role(tmp_path, monkeypatch):
+    """No explicit language set -> the member's mapped role decides."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_role_language(1, 10, "fr")
+    member = _make_member(1, 100, role_ids=[10])
+
+    assert bot_main._resolve_member_language(member) == "fr"
+
+
+def test_resolve_member_language_none_when_unmapped(tmp_path, monkeypatch):
+    """No explicit language and no mapped role -> no language is guessed."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    member = _make_member(1, 100)
+
+    assert bot_main._resolve_member_language(member) is None
+
+
+def test_resolve_guild_recipients_merges_roles_and_explicit(tmp_path, monkeypatch):
+    """Role holders and explicit users both show up; explicit overrides role for the same user."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_role_language(1, 10, "fr")
+    storage.set_user_language(1, 200, "es")
+    storage.set_user_language(1, 300, "de")
+    member_role_only = _make_member(1, 100, role_ids=[10])
+    member_explicit_overrides_role = _make_member(1, 300, role_ids=[10])
+
+    guild = MagicMock()
+    guild.id = 1
+    guild.members = [member_role_only, member_explicit_overrides_role]
+
+    recipients = bot_main._resolve_guild_recipients(guild)
+
+    assert recipients[100] == "fr"
+    assert recipients[300] == "de"
+    assert recipients[200] == "es"

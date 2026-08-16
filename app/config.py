@@ -17,3 +17,4 @@ NLLB_URL = os.getenv("NLLB_URL", "http://nllb:8000")
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 USER_LANGUAGES_PATH = DATA_DIR / "user_languages.json"
+ROLE_LANGUAGES_PATH = DATA_DIR / "role_languages.json"

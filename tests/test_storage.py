@@ -4,6 +4,7 @@ from app import storage
 def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
     monkeypatch.setattr(storage, "USER_LANGUAGES_PATH", tmp_path / "user_languages.json")
+    monkeypatch.setattr(storage, "ROLE_LANGUAGES_PATH", tmp_path / "role_languages.json")
 
 
 def test_get_user_language_missing_file_returns_none(tmp_path, monkeypatch):
@@ -34,3 +35,19 @@ def test_guild_user_languages_isolates_by_guild(tmp_path, monkeypatch):
 
     assert storage.guild_user_languages(1) == {100: "es", 200: "en"}
     assert storage.guild_user_languages(2) == {300: "fr"}
+
+
+def test_role_languages_round_trip_and_isolate_by_guild(tmp_path, monkeypatch):
+    """Role mappings persist independently of user mappings and stay per-guild."""
+    _use_tmp_store(tmp_path, monkeypatch)
+
+    storage.set_role_language(1, 10, "es")
+    storage.set_role_language(1, 20, "en")
+    storage.set_role_language(2, 30, "fr")
+
+    assert storage.get_role_language(1, 10) == "es"
+    assert storage.get_role_language(1, 999) is None
+    assert storage.guild_role_languages(1) == {10: "es", 20: "en"}
+    assert storage.guild_role_languages(2) == {30: "fr"}
+    # User and role stores don't collide even with overlapping guild/id numbers.
+    assert storage.guild_user_languages(1) == {}
