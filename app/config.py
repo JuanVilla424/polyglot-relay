@@ -13,6 +13,7 @@ if not DISCORD_BOT_TOKEN:
     sys.exit(1)
 
 LIBRETRANSLATE_URL = os.getenv("LIBRETRANSLATE_URL", "http://libretranslate:5000")
+NLLB_URL = os.getenv("NLLB_URL", "http://nllb:8000")
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 USER_LANGUAGES_PATH = DATA_DIR / "user_languages.json"

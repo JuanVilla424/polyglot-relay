@@ -7,7 +7,7 @@
 ![Status](https://img.shields.io/badge/Status-Stable-green.svg)
 ![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)
 
-**polyglot-relay** is a self-hosted Discord auto-translation bot. It replaces rate-limited SaaS translators (like iTranslator's 10,000 chars/server and 2,000 chars/user free-tier caps, with the full language catalog paywalled behind Premium) with your own [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate) instance: no character limits, no paywalled languages.
+**polyglot-relay** is a self-hosted Discord auto-translation bot. It replaces rate-limited SaaS translators (like iTranslator's 10,000 chars/server and 2,000 chars/user free-tier caps, with the full language catalog paywalled behind Premium) with a fully self-hosted pipeline: no character limits, no paywalled languages, and no dependency on a paid third-party translation API. Language detection runs on [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate); the actual translation runs on a self-hosted [NLLB-200](https://github.com/facebookresearch/flores/tree/main/flores200) (Meta) model via [CTranslate2](https://github.com/OpenNMT/CTranslate2) for meaningfully better quality than Argos Translate alone.
 
 Each server member sets their own preferred language once. From then on, every message is translated and delivered to them **privately via DM**, in their language — nothing is posted publicly in the channel. A right-click "Translate Message" command is also available for one-off, on-demand translations.
 
@@ -34,7 +34,7 @@ Each server member sets their own preferred language once. From then on, every m
 - **Full language catalog:** nothing paywalled behind a premium tier.
 - **Private per-user delivery:** each member gets translations DMed in their own configured language — the channel stays untouched.
 - **On-demand fallback:** right-click any message → Apps → "Translate Message" for a one-off ephemeral translation (no privileged Discord intent needed for this path).
-- **Fully self-hosted:** two Docker services (`libretranslate` + `bot`), no external translation API or third-party bot dependency.
+- **Fully self-hosted:** three Docker services (`libretranslate` for language detection, `nllb` for translation, `bot`), no external translation API or third-party bot dependency.
 - **Automated Version Control:** automatic version bumping, tagging, and promotion across branches (dev → test → prod → main).
 - **Automated Release Notes:** GitHub Releases with categorized changelogs generated from conventional commits.
 
@@ -139,7 +139,9 @@ docker compose up -d
 
 The `mkdir`/`chmod` step matters: if Docker auto-creates `./data` for you (by skipping it and going straight to `docker compose up`), it comes back owned by `root` and the bot's non-root user gets `PermissionError` writing `user_languages.json` — commands like `/setlanguage` fail with "The application did not respond" in Discord, with the real error only visible via `docker logs polyglot-relay-bot`.
 
-This starts two services: `libretranslate` (the translation engine, with its full language catalog — 50 languages as of v1.9.6, verified via its `/languages` endpoint — reachable only from the `bot` service over the internal Docker network) and `bot` (the Discord bot itself). Language models are downloaded into a persistent volume on first run; expect the first boot to take several minutes and multiple GB of network traffic while `libretranslate` fetches every model, subsequent restarts reuse the volume and start immediately.
+This starts three services, none exposed outside the internal Docker network: `libretranslate` (language detection only — 50 languages as of v1.9.6), `nllb` (translation, via a self-hosted NLLB-200 distilled-600M model converted from Meta's official weights the first time it's needed), and `bot`. `libretranslate` downloads its models on first run (several minutes, multiple GB); `nllb` converts its model lazily on the first real translation request instead of at startup, so the very first translation after a fresh deploy is noticeably slower than the rest — both are cached in Docker volumes afterward and start immediately on restart.
+
+Language coverage for translation is limited to the languages mapped in `app/lang_codes.py` (curated common languages, not the full FLORES-200/200-language set) — `/setlanguage` with an unmapped code fails with a clear error instead of mistranslating.
 
 ### 🛸 Pre-Commit Hooks
 

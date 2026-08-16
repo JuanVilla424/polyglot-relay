@@ -3,6 +3,7 @@ from discord import app_commands
 
 from app import storage, translator
 from app.config import DISCORD_BOT_TOKEN
+from app.lang_codes import to_flores
 from app.logger import logger
 
 intents = discord.Intents.default()
@@ -19,6 +20,11 @@ async def setlanguage(interaction: discord.Interaction, code: str):
     if interaction.guild_id is None:
         await interaction.response.send_message(
             "This command only works inside a server.", ephemeral=True
+        )
+        return
+    if to_flores(code) is None:
+        await interaction.response.send_message(
+            f"`{code}` isn't a supported language code.", ephemeral=True
         )
         return
     storage.set_user_language(interaction.guild_id, interaction.user.id, code.lower())
@@ -46,6 +52,11 @@ async def translate_message(interaction: discord.Interaction, message: discord.M
 
     try:
         translated, detected = await translator.translate(message.content, target)
+    except translator.UnsupportedLanguageError:
+        await interaction.followup.send(
+            "That message's language isn't supported for translation.", ephemeral=True
+        )
+        return
     except Exception:
         logger.exception("on-demand translation failed")
         await interaction.followup.send("Translation failed, try again later.", ephemeral=True)

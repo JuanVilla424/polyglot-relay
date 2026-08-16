@@ -29,7 +29,8 @@ jobs:
           black --check app/
           black --check tests/
           black --check scripts/
+          black --check nllb/
       - name: Lint with Pylint
         run: |
           source venv/bin/activate
-          pylint $(git ls-files '*.py')
+          pylint $(git ls-files '*.py' | grep -v '^nllb/')
