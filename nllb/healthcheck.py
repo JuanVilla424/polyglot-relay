@@ -4,6 +4,7 @@ import sys
 import urllib.request
 
 try:
-    urllib.request.urlopen("http://localhost:8000/health", timeout=3)
+    with urllib.request.urlopen("http://localhost:8000/health", timeout=3):
+        pass
 except Exception:  # pylint: disable=broad-except
     sys.exit(1)

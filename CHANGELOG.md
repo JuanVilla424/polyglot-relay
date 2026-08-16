@@ -1,3 +1,9 @@
+## [1.0.5] - 2026-08-16
+
+### Bug Fixes
+
+- **core**: bump dependencies to patch dependabot vulnerabilities and alerts (`patch candidate`)
+
 ## [1.0.4] - 2026-08-16
 
 ### Features
