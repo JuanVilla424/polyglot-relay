@@ -19,8 +19,9 @@ tree = app_commands.CommandTree(client)
 HEARTBEAT_PATH = Path("/tmp/healthy")
 
 # The server's own working language: always translated to, in addition to
-# whatever individual members/roles have configured.
-SERVER_LANGUAGE = "en"
+# whatever individual members/roles have configured. An admin can override
+# this per guild with /setserverlanguage; this is only the built-in fallback.
+DEFAULT_SERVER_LANGUAGE = "en"
 
 
 @tasks.loop(seconds=30)
@@ -215,6 +216,64 @@ async def clearrolelanguage(interaction: discord.Interaction, role: discord.Role
 clearrolelanguage.error(_admin_command_error)
 
 
+@tree.command(
+    name="setserverlanguage",
+    description="Admin: set this server's fallback translation language",
+)
+@app_commands.describe(code="Language code, e.g. es, en, fr")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def setserverlanguage(interaction: discord.Interaction, code: str):
+    """Every translation thread always includes this language, on top of members/roles."""
+    if interaction.guild_id is None:
+        await interaction.response.send_message(
+            "This command only works inside a server.", ephemeral=True
+        )
+        return
+    if to_flores(code) is None:
+        await interaction.response.send_message(
+            f"`{code}` isn't a supported language code.", ephemeral=True
+        )
+        await _report_language_change(
+            f"⚠️ {interaction.user.mention} tried `{code}` for the server language (not supported)"
+        )
+        return
+    storage.set_server_language(interaction.guild_id, code.lower())
+    await interaction.response.send_message(
+        f"Server fallback language set to `{code.lower()}`.", ephemeral=True
+    )
+    await _report_language_change(
+        f"🌐 {interaction.user.mention} set the server language to `{code.lower()}`"
+    )
+
+
+setserverlanguage.error(_admin_command_error)
+
+
+@tree.command(
+    name="clearserverlanguage",
+    description=f"Admin: reset the server's fallback language to the default ({DEFAULT_SERVER_LANGUAGE})",
+)
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def clearserverlanguage(interaction: discord.Interaction):
+    """Let an admin drop the guild's override and go back to the built-in default."""
+    if interaction.guild_id is None:
+        await interaction.response.send_message(
+            "This command only works inside a server.", ephemeral=True
+        )
+        return
+    storage.clear_server_language(interaction.guild_id)
+    await interaction.response.send_message(
+        f"Server fallback language reset to the default (`{DEFAULT_SERVER_LANGUAGE}`).",
+        ephemeral=True,
+    )
+    await _report_language_change(f"🚫 {interaction.user.mention} cleared the server language")
+
+
+clearserverlanguage.error(_admin_command_error)
+
+
 @tree.command(name="languages", description="List the language codes this bot supports")
 async def languages(interaction: discord.Interaction):
     """Show every ISO 639-1 code mapped in app/lang_codes.py, with its language name."""
@@ -239,6 +298,8 @@ async def help_command(interaction: discord.Interaction):
         "`/clearuserlanguage <member>` — remove another member's language",
         "`/setrolelanguage <role> <code>` — anyone with that role defaults to this language",
         "`/clearrolelanguage <role>` — remove a role's language mapping",
+        "`/setserverlanguage <code>` — set this server's fallback translation language",
+        "`/clearserverlanguage` — reset the server's fallback language to the default",
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
@@ -326,8 +387,9 @@ async def _translate_to_thread(message: discord.Message) -> str:
     if not isinstance(message.channel, discord.TextChannel):
         return "This only works in a text channel."
 
+    server_language = storage.get_server_language(message.guild.id) or DEFAULT_SERVER_LANGUAGE
     target_languages = _channel_active_languages(message.channel, message.author.id) | {
-        SERVER_LANGUAGE
+        server_language
     }
     logger.info(
         "guild %s: %d members cached, active languages in #%s: %s",

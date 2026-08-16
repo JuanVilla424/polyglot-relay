@@ -13,6 +13,7 @@ def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
     monkeypatch.setattr(storage, "USER_LANGUAGES_PATH", tmp_path / "user_languages.json")
     monkeypatch.setattr(storage, "ROLE_LANGUAGES_PATH", tmp_path / "role_languages.json")
+    monkeypatch.setattr(storage, "SERVER_LANGUAGE_PATH", tmp_path / "server_language.json")
 
 
 def _make_member(guild_id, user_id, role_ids=()):
@@ -69,6 +70,8 @@ def test_commands_are_registered():
     assert "setlanguage" in names
     assert "setuserlanguage" in names
     assert "setrolelanguage" in names
+    assert "setserverlanguage" in names
+    assert "clearserverlanguage" in names
     assert "languages" in names
     assert "help" in names
     assert "Translate Message" in names
@@ -126,6 +129,31 @@ def test_setrolelanguage_stores_for_role(tmp_path, monkeypatch):
     asyncio.run(bot_main.setrolelanguage.callback(interaction, role, "fr"))
 
     assert storage.get_role_language(1, 10) == "fr"
+
+
+def test_setserverlanguage_stores_for_guild(tmp_path, monkeypatch):
+    """An admin can set the server's fallback translation language."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.response.send_message = AsyncMock()
+
+    asyncio.run(bot_main.setserverlanguage.callback(interaction, "fr"))
+
+    assert storage.get_server_language(1) == "fr"
+
+
+def test_setserverlanguage_rejects_unsupported_code(tmp_path, monkeypatch):
+    """Unmapped language codes are rejected before ever touching storage."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.response.send_message = AsyncMock()
+
+    asyncio.run(bot_main.setserverlanguage.callback(interaction, "xx"))
+
+    interaction.response.send_message.assert_awaited_once()
+    assert storage.get_server_language(1) is None
 
 
 def test_admin_command_error_reports_missing_permissions():
@@ -292,6 +320,19 @@ def test_clearrolelanguage_removes_role_mapping(tmp_path, monkeypatch):
     assert storage.get_role_language(1, 10) is None
 
 
+def test_clearserverlanguage_resets_to_default(tmp_path, monkeypatch):
+    """An admin can drop the guild's override and go back to the built-in default."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_server_language(1, "fr")
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.response.send_message = AsyncMock()
+
+    asyncio.run(bot_main.clearserverlanguage.callback(interaction))
+
+    assert storage.get_server_language(1) is None
+
+
 def test_languages_command_lists_known_codes():
     """The /languages command surfaces codes together with their language name."""
     interaction = MagicMock()
@@ -320,6 +361,8 @@ def test_help_command_lists_every_command():
         "/clearuserlanguage",
         "/setrolelanguage",
         "/clearrolelanguage",
+        "/setserverlanguage",
+        "/clearserverlanguage",
     ):
         assert command in sent
 
@@ -381,7 +424,7 @@ def test_on_message_falls_back_to_server_language_with_no_configured_members(tmp
     message.create_thread.assert_awaited_once()
     sent_embeds = message.create_thread.return_value.send.call_args.kwargs["embeds"]
     assert len(sent_embeds) == 1
-    assert sent_embeds[0].title.startswith(bot_main.SERVER_LANGUAGE)
+    assert sent_embeds[0].title.startswith(bot_main.DEFAULT_SERVER_LANGUAGE)
     assert sent_embeds[0].description == "Hello"
 
 
@@ -389,12 +432,29 @@ def test_on_message_no_thread_when_already_in_server_language(tmp_path, monkeypa
     """A message already in the server language, with no one else configured, gets no thread."""
     _use_tmp_store(tmp_path, monkeypatch)
     message = _make_message(100, content="hello")
-    translate_mock = AsyncMock(return_value=("hello", bot_main.SERVER_LANGUAGE))
+    translate_mock = AsyncMock(return_value=("hello", bot_main.DEFAULT_SERVER_LANGUAGE))
     monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
 
     asyncio.run(bot_main.on_message(message))
 
     message.create_thread.assert_not_awaited()
+
+
+def test_on_message_uses_guild_server_language_override(tmp_path, monkeypatch):
+    """A guild-configured server language wins over the built-in default."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_server_language(1, "es")
+    message = _make_message(100, content="hello")
+    message.guild.id = 1
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
+
+    asyncio.run(bot_main.on_message(message))
+
+    message.create_thread.assert_awaited_once()
+    sent_embeds = message.create_thread.return_value.send.call_args.kwargs["embeds"]
+    assert len(sent_embeds) == 1
+    assert sent_embeds[0].title.startswith("es")
+    assert sent_embeds[0].description == "hola"
 
 
 def test_on_message_handles_thread_creation_failure_gracefully(tmp_path, monkeypatch):
@@ -453,7 +513,7 @@ def test_retry_translation_thread_reports_when_nothing_to_translate(tmp_path, mo
     monkeypatch.setattr(
         bot_main.translator,
         "translate",
-        AsyncMock(return_value=("hello", bot_main.SERVER_LANGUAGE)),
+        AsyncMock(return_value=("hello", bot_main.DEFAULT_SERVER_LANGUAGE)),
     )
 
     asyncio.run(bot_main.retry_translation_thread.callback(interaction, message))

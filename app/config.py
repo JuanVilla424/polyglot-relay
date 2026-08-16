@@ -21,3 +21,4 @@ LOG_CHANNEL_ID = int(_log_channel_id) if _log_channel_id else None
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 USER_LANGUAGES_PATH = DATA_DIR / "user_languages.json"
 ROLE_LANGUAGES_PATH = DATA_DIR / "role_languages.json"
+SERVER_LANGUAGE_PATH = DATA_DIR / "server_language.json"

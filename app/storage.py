@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from app.config import DATA_DIR, ROLE_LANGUAGES_PATH, USER_LANGUAGES_PATH
+from app.config import DATA_DIR, ROLE_LANGUAGES_PATH, SERVER_LANGUAGE_PATH, USER_LANGUAGES_PATH
 
 
 def _key(guild_id: int, entity_id: int) -> str:
@@ -50,6 +50,23 @@ def clear_role_language(guild_id: int, role_id: int) -> None:
 def guild_role_languages(guild_id: int) -> dict[int, str]:
     """Return {role_id: language_code} for every role mapped on this guild."""
     return _guild_entries(ROLE_LANGUAGES_PATH, guild_id)
+
+
+def get_server_language(guild_id: int) -> str | None:
+    """Return the guild's configured fallback language, if an admin set one."""
+    return _read(SERVER_LANGUAGE_PATH).get(str(guild_id))
+
+
+def set_server_language(guild_id: int, language_code: str) -> None:
+    """Persist the guild's fallback language, overriding the built-in default."""
+    data = _read(SERVER_LANGUAGE_PATH)
+    data[str(guild_id)] = language_code
+    _write(SERVER_LANGUAGE_PATH, data)
+
+
+def clear_server_language(guild_id: int) -> None:
+    """Remove the guild's fallback language override, if any was set."""
+    _clear(SERVER_LANGUAGE_PATH, str(guild_id))
 
 
 def _clear(path: Path, key: str) -> None:
