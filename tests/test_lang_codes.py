@@ -5,6 +5,7 @@ def test_to_flores_maps_known_codes():
     """Known ISO 639-1 codes resolve to their FLORES-200 equivalent."""
     assert to_flores("es") == "spa_Latn"
     assert to_flores("en") == "eng_Latn"
+    assert to_flores("ca") == "cat_Latn"
 
 
 def test_to_flores_is_case_insensitive():

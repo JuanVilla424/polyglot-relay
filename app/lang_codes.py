@@ -35,6 +35,7 @@ ISO_TO_FLORES = {
     "da": "dan_Latn",
     "no": "nob_Latn",
     "bn": "ben_Beng",
+    "ca": "cat_Latn",
 }
 
 
