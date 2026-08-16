@@ -75,3 +75,29 @@ ISO_TO_NAME = {
 def to_flores(iso_code: str) -> str | None:
     """Map an ISO 639-1 code to its FLORES-200 equivalent, if supported."""
     return ISO_TO_FLORES.get(iso_code.lower())
+
+
+# Validated categorical palette (8 slots, fixed order, CVD-safe adjacent pairs),
+# dark-surface steps since Discord's embed panel reads dark in both client themes.
+LANGUAGE_COLORS = [
+    0x3987E5,  # blue
+    0xD95926,  # orange
+    0x199E70,  # aqua
+    0xC98500,  # yellow
+    0xD55181,  # magenta
+    0x008300,  # green
+    0x9085E9,  # violet
+    0xE66767,  # red
+]
+
+_LANGUAGE_ORDER = list(ISO_TO_FLORES)
+
+
+def color_for(iso_code: str) -> int:
+    """Deterministic color per language code: fixed slot order, cycled past 8 codes.
+
+    Identity is never color-alone (each embed also shows the code + name as
+    text) so reuse past the 8th language is an acceptable, documented trade-off.
+    """
+    index = _LANGUAGE_ORDER.index(iso_code) if iso_code in _LANGUAGE_ORDER else 0
+    return LANGUAGE_COLORS[index % len(LANGUAGE_COLORS)]

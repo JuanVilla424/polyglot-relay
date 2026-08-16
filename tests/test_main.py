@@ -350,9 +350,10 @@ def test_on_message_creates_thread_with_combined_translations(tmp_path, monkeypa
     message.create_thread.assert_awaited_once()
     thread = message.create_thread.return_value
     thread.send.assert_awaited_once()
-    sent = thread.send.call_args.args[0]
-    assert "es" in sent
-    assert "hola" in sent
+    sent_embeds = thread.send.call_args.kwargs["embeds"]
+    assert len(sent_embeds) == 1
+    assert sent_embeds[0].title.startswith("es")
+    assert sent_embeds[0].description == "hola"
 
 
 def test_on_message_no_thread_when_detected_already_matches(tmp_path, monkeypatch):
@@ -378,9 +379,10 @@ def test_on_message_falls_back_to_server_language_with_no_configured_members(tmp
     asyncio.run(bot_main.on_message(message))
 
     message.create_thread.assert_awaited_once()
-    sent = message.create_thread.return_value.send.call_args.args[0]
-    assert bot_main.SERVER_LANGUAGE in sent
-    assert "Hello" in sent
+    sent_embeds = message.create_thread.return_value.send.call_args.kwargs["embeds"]
+    assert len(sent_embeds) == 1
+    assert sent_embeds[0].title.startswith(bot_main.SERVER_LANGUAGE)
+    assert sent_embeds[0].description == "Hello"
 
 
 def test_on_message_no_thread_when_already_in_server_language(tmp_path, monkeypatch):
@@ -461,54 +463,71 @@ def test_retry_translation_thread_reports_when_nothing_to_translate(tmp_path, mo
     assert "Nothing to translate" in interaction.followup.send.call_args.args[0]
 
 
-def test_chunk_lines_fits_short_lines_in_one_chunk():
-    """Well under Discord's limit -> a single chunk with every line."""
-    lines = ["**es**: hola", "**en**: hello"]
+def test_make_language_embed_sets_title_description_and_color():
+    """Each embed carries the language code+name as title and a deterministic color."""
+    embed = bot_main._make_language_embed("es", "hola")
 
-    chunks = bot_main._chunk_lines(lines)
-
-    assert chunks == ["**es**: hola\n**en**: hello"]
-
-
-def test_chunk_lines_splits_when_combined_length_exceeds_the_limit():
-    """Real crash case (Discord error 50035): many languages combined push past 2000 chars."""
-    lines = ["**xx**: " + ("a" * 1900) for _ in range(3)]
-
-    chunks = bot_main._chunk_lines(lines)
-
-    assert len(chunks) > 1
-    for chunk in chunks:
-        assert len(chunk) <= bot_main.DISCORD_MESSAGE_LIMIT
-    # No line was dropped or merged incorrectly across the split.
-    assert sum(chunk.count("**xx**:") for chunk in chunks) == 3
+    assert embed.title == "es — Spanish"
+    assert embed.description == "hola"
+    assert embed.color.value == bot_main.color_for("es")
 
 
-def test_chunk_lines_truncates_a_single_line_longer_than_the_limit():
-    """A pathological single translation longer than 2000 chars gets truncated, not dropped."""
-    lines = ["**es**: " + ("a" * 2500)]
-
-    chunks = bot_main._chunk_lines(lines)
-
-    assert len(chunks) == 1
-    assert len(chunks[0]) <= bot_main.DISCORD_MESSAGE_LIMIT
-    assert chunks[0].endswith("…")
+def test_color_for_is_deterministic_and_reused_past_eight_codes():
+    """Same code -> same color every time; the 8-slot palette cycles for the 9th+ code."""
+    codes = list(bot_main.ISO_TO_FLORES)
+    assert bot_main.color_for(codes[0]) == bot_main.color_for(codes[0])
+    if len(codes) > 8:
+        assert bot_main.color_for(codes[0]) == bot_main.color_for(codes[8])
 
 
-def test_on_message_sends_multiple_chunks_when_translations_are_long(tmp_path, monkeypatch):
-    """The real crash scenario: 5 active languages whose combined text exceeds 2000 chars."""
+def test_chunk_embeds_fits_a_few_embeds_in_one_batch():
+    """A handful of short embeds -> a single batch, one thread message."""
+    embeds = [bot_main._make_language_embed(code, "short") for code in ("es", "en", "fr")]
+
+    batches = bot_main._chunk_embeds(embeds)
+
+    assert len(batches) == 1
+    assert len(batches[0]) == 3
+
+
+def test_chunk_embeds_splits_past_the_ten_embed_cap():
+    """Discord allows at most 10 embeds per message -> more than that needs multiple batches."""
+    embeds = [bot_main._make_language_embed(f"x{i}", "short") for i in range(11)]
+
+    batches = bot_main._chunk_embeds(embeds)
+
+    assert [len(b) for b in batches] == [10, 1]
+
+
+def test_chunk_embeds_splits_when_combined_length_exceeds_the_limit():
+    """Real crash case (Discord error 50035), now avoided by batching embeds by size too."""
+    embeds = [bot_main._make_language_embed(f"x{i}", "a" * 1900) for i in range(4)]
+
+    batches = bot_main._chunk_embeds(embeds)
+
+    assert len(batches) > 1
+    for batch in batches:
+        total = sum(len(e.title or "") + len(e.description or "") for e in batch)
+        assert total <= bot_main.DISCORD_EMBED_TOTAL_CHAR_LIMIT
+
+
+def test_on_message_batches_embeds_past_the_ten_language_cap(tmp_path, monkeypatch):
+    """More than 10 active languages -> multiple thread messages, all embeds still delivered."""
     _use_tmp_store(tmp_path, monkeypatch)
+    codes = ["es", "fr", "de", "pt", "it", "ja", "ko", "zh", "ru", "ar", "hi"]
     members = []
-    for i, lang in enumerate(("es", "it", "pl", "ru", "fr")):
+    for i, lang in enumerate(codes):
         storage.set_user_language(1, 200 + i, lang)
         members.append(_make_member(1, 200 + i))
     channel = _make_channel(members=members)
     message = _make_message(100, content="hello", channel=channel)
-    long_text = "a" * 900
-    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=(long_text, "en")))
+    monkeypatch.setattr(
+        bot_main.translator, "translate", AsyncMock(return_value=("translated", "en"))
+    )
 
     asyncio.run(bot_main.on_message(message))  # must not raise
 
     thread = message.create_thread.return_value
-    assert thread.send.await_count > 1
-    for call in thread.send.call_args_list:
-        assert len(call.args[0]) <= bot_main.DISCORD_MESSAGE_LIMIT
+    assert thread.send.await_count == 2
+    total_embeds = sum(len(call.kwargs["embeds"]) for call in thread.send.call_args_list)
+    assert total_embeds == len(codes)
