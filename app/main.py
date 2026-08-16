@@ -224,7 +224,7 @@ clearrolelanguage.error(_admin_command_error)
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.checks.has_permissions(manage_guild=True)
 async def setserverlanguage(interaction: discord.Interaction, code: str):
-    """Every translation thread always includes this language, on top of members/roles."""
+    """Every translation reply always includes this language, on top of members/roles."""
     if interaction.guild_id is None:
         await interaction.response.send_message(
             "This command only works inside a server.", ephemeral=True
@@ -379,7 +379,7 @@ def _chunk_embeds(embeds: list[discord.Embed]) -> list[list[discord.Embed]]:
     return chunks
 
 
-async def _translate_to_thread(message: discord.Message) -> str:
+async def _translate_and_reply(message: discord.Message) -> str:
     """Core auto-translate logic: shared by on_message and the admin retry command.
 
     Returns a short human-readable status, used by the retry command's response.
@@ -416,40 +416,39 @@ async def _translate_to_thread(message: discord.Message) -> str:
         return "Nothing to translate (already matches every active language)."
 
     try:
-        thread = await message.create_thread(name="🌐 Translation", auto_archive_duration=1440)
         for batch in _chunk_embeds(embeds):
-            await thread.send(embeds=batch)
+            await message.reply(embeds=batch, mention_author=False)
     except discord.HTTPException:
-        logger.exception("failed to create/post translation thread")
-        return "Failed to create the thread (it may already have one, or I lack permission)."
+        logger.exception("failed to send translation reply")
+        return "Failed to send the translation (I may lack permission)."
 
-    return "Thread created."
+    return "Translation sent."
 
 
 @client.event
 async def on_message(message: discord.Message):
-    """Reply in a thread with the message translated into every language active here."""
+    """Reply with the message translated into every language active here."""
     if message.author.bot or message.guild is None or not message.content:
         return
-    await _translate_to_thread(message)
+    await _translate_and_reply(message)
 
 
-@tree.context_menu(name="Retry Translation Thread")
+@tree.context_menu(name="Retry Translation")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.checks.has_permissions(manage_guild=True)
-async def retry_translation_thread(interaction: discord.Interaction, message: discord.Message):
-    """Admin fallback: manually re-run the auto-translate thread logic on one message."""
+async def retry_translation(interaction: discord.Interaction, message: discord.Message):
+    """Admin fallback: manually re-run the auto-translate logic on one message."""
     if not message.content:
         await interaction.response.send_message(
             "Nothing to translate in that message.", ephemeral=True
         )
         return
     await interaction.response.defer(ephemeral=True)
-    status = await _translate_to_thread(message)
+    status = await _translate_and_reply(message)
     await interaction.followup.send(status, ephemeral=True)
 
 
-retry_translation_thread.error(_admin_command_error)
+retry_translation.error(_admin_command_error)
 
 
 def main():

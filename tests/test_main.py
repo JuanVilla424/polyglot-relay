@@ -48,7 +48,7 @@ def _make_message(author_id, content="hello", author_is_bot=False, channel=None)
     message.content = content
     message.channel = channel if channel is not None else _make_channel()
     message.guild = message.channel.guild
-    message.create_thread = AsyncMock()
+    message.reply = AsyncMock()
     return message
 
 
@@ -75,7 +75,7 @@ def test_commands_are_registered():
     assert "languages" in names
     assert "help" in names
     assert "Translate Message" in names
-    assert "Retry Translation Thread" in names
+    assert "Retry Translation" in names
 
 
 def test_setlanguage_rejects_unsupported_code(tmp_path, monkeypatch):
@@ -379,8 +379,8 @@ def test_on_message_ignores_bot_authors(tmp_path, monkeypatch):
     translate_mock.assert_not_awaited()
 
 
-def test_on_message_creates_thread_with_combined_translations(tmp_path, monkeypatch):
-    """A channel with an active language gets a thread with the translation."""
+def test_on_message_replies_with_combined_translations(tmp_path, monkeypatch):
+    """A channel with an active language gets a reply with the translation."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_user_language(1, 200, "es")
     member = _make_member(1, 200)
@@ -390,17 +390,16 @@ def test_on_message_creates_thread_with_combined_translations(tmp_path, monkeypa
 
     asyncio.run(bot_main.on_message(message))
 
-    message.create_thread.assert_awaited_once()
-    thread = message.create_thread.return_value
-    thread.send.assert_awaited_once()
-    sent_embeds = thread.send.call_args.kwargs["embeds"]
+    message.reply.assert_awaited_once()
+    assert message.reply.call_args.kwargs["mention_author"] is False
+    sent_embeds = message.reply.call_args.kwargs["embeds"]
     assert len(sent_embeds) == 1
     assert sent_embeds[0].title.startswith("es")
     assert sent_embeds[0].description == "hola"
 
 
-def test_on_message_no_thread_when_detected_already_matches(tmp_path, monkeypatch):
-    """No thread noise when the detected language already matches the only active one."""
+def test_on_message_no_reply_when_detected_already_matches(tmp_path, monkeypatch):
+    """No reply noise when the detected language already matches the only active one."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_user_language(1, 200, "en")
     member = _make_member(1, 200)
@@ -410,26 +409,26 @@ def test_on_message_no_thread_when_detected_already_matches(tmp_path, monkeypatc
 
     asyncio.run(bot_main.on_message(message))
 
-    message.create_thread.assert_not_awaited()
+    message.reply.assert_not_awaited()
 
 
 def test_on_message_falls_back_to_server_language_with_no_configured_members(tmp_path, monkeypatch):
-    """An empty channel still gets a server-language thread for a non-server-language message."""
+    """An empty channel still gets a server-language reply for a non-server-language message."""
     _use_tmp_store(tmp_path, monkeypatch)
     message = _make_message(100, content="hola")
     monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("Hello", "es")))
 
     asyncio.run(bot_main.on_message(message))
 
-    message.create_thread.assert_awaited_once()
-    sent_embeds = message.create_thread.return_value.send.call_args.kwargs["embeds"]
+    message.reply.assert_awaited_once()
+    sent_embeds = message.reply.call_args.kwargs["embeds"]
     assert len(sent_embeds) == 1
     assert sent_embeds[0].title.startswith(bot_main.DEFAULT_SERVER_LANGUAGE)
     assert sent_embeds[0].description == "Hello"
 
 
-def test_on_message_no_thread_when_already_in_server_language(tmp_path, monkeypatch):
-    """A message already in the server language, with no one else configured, gets no thread."""
+def test_on_message_no_reply_when_already_in_server_language(tmp_path, monkeypatch):
+    """A message already in the server language, with no one else configured, gets no reply."""
     _use_tmp_store(tmp_path, monkeypatch)
     message = _make_message(100, content="hello")
     translate_mock = AsyncMock(return_value=("hello", bot_main.DEFAULT_SERVER_LANGUAGE))
@@ -437,7 +436,7 @@ def test_on_message_no_thread_when_already_in_server_language(tmp_path, monkeypa
 
     asyncio.run(bot_main.on_message(message))
 
-    message.create_thread.assert_not_awaited()
+    message.reply.assert_not_awaited()
 
 
 def test_on_message_uses_guild_server_language_override(tmp_path, monkeypatch):
@@ -450,41 +449,41 @@ def test_on_message_uses_guild_server_language_override(tmp_path, monkeypatch):
 
     asyncio.run(bot_main.on_message(message))
 
-    message.create_thread.assert_awaited_once()
-    sent_embeds = message.create_thread.return_value.send.call_args.kwargs["embeds"]
+    message.reply.assert_awaited_once()
+    sent_embeds = message.reply.call_args.kwargs["embeds"]
     assert len(sent_embeds) == 1
     assert sent_embeds[0].title.startswith("es")
     assert sent_embeds[0].description == "hola"
 
 
-def test_on_message_handles_thread_creation_failure_gracefully(tmp_path, monkeypatch):
-    """A permission error creating the thread doesn't raise out of the handler."""
+def test_on_message_handles_reply_failure_gracefully(tmp_path, monkeypatch):
+    """A permission error sending the reply doesn't raise out of the handler."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_user_language(1, 200, "es")
     member = _make_member(1, 200)
     channel = _make_channel(members=[member])
     message = _make_message(100, content="hello", channel=channel)
     response = MagicMock(status=403, reason="Forbidden")
-    message.create_thread = AsyncMock(side_effect=discord.Forbidden(response, "no perms"))
+    message.reply = AsyncMock(side_effect=discord.Forbidden(response, "no perms"))
     monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
 
     asyncio.run(bot_main.on_message(message))  # must not raise
 
 
-def test_retry_translation_thread_rejects_empty_message(tmp_path, monkeypatch):
+def test_retry_translation_rejects_empty_message(tmp_path, monkeypatch):
     """An admin can't retry a message with no content."""
     _use_tmp_store(tmp_path, monkeypatch)
     interaction = MagicMock()
     interaction.response.send_message = AsyncMock()
     message = _make_message(100, content="")
 
-    asyncio.run(bot_main.retry_translation_thread.callback(interaction, message))
+    asyncio.run(bot_main.retry_translation.callback(interaction, message))
 
     interaction.response.send_message.assert_awaited_once()
-    message.create_thread.assert_not_awaited()
+    message.reply.assert_not_awaited()
 
 
-def test_retry_translation_thread_creates_thread_and_reports_status(tmp_path, monkeypatch):
+def test_retry_translation_replies_and_reports_status(tmp_path, monkeypatch):
     """A successful retry defers, runs the same logic as on_message, then reports success."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_user_language(1, 200, "es")
@@ -496,14 +495,14 @@ def test_retry_translation_thread_creates_thread_and_reports_status(tmp_path, mo
     interaction.followup.send = AsyncMock()
     monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
 
-    asyncio.run(bot_main.retry_translation_thread.callback(interaction, message))
+    asyncio.run(bot_main.retry_translation.callback(interaction, message))
 
     interaction.response.defer.assert_awaited_once()
-    message.create_thread.assert_awaited_once()
-    interaction.followup.send.assert_awaited_once_with("Thread created.", ephemeral=True)
+    message.reply.assert_awaited_once()
+    interaction.followup.send.assert_awaited_once_with("Translation sent.", ephemeral=True)
 
 
-def test_retry_translation_thread_reports_when_nothing_to_translate(tmp_path, monkeypatch):
+def test_retry_translation_reports_when_nothing_to_translate(tmp_path, monkeypatch):
     """No active languages -> the admin gets told nothing happened, not silence."""
     _use_tmp_store(tmp_path, monkeypatch)
     message = _make_message(100, content="hello")
@@ -516,9 +515,9 @@ def test_retry_translation_thread_reports_when_nothing_to_translate(tmp_path, mo
         AsyncMock(return_value=("hello", bot_main.DEFAULT_SERVER_LANGUAGE)),
     )
 
-    asyncio.run(bot_main.retry_translation_thread.callback(interaction, message))
+    asyncio.run(bot_main.retry_translation.callback(interaction, message))
 
-    message.create_thread.assert_not_awaited()
+    message.reply.assert_not_awaited()
     interaction.followup.send.assert_awaited_once()
     assert "Nothing to translate" in interaction.followup.send.call_args.args[0]
 
@@ -541,7 +540,7 @@ def test_color_for_is_deterministic_and_reused_past_eight_codes():
 
 
 def test_chunk_embeds_fits_a_few_embeds_in_one_batch():
-    """A handful of short embeds -> a single batch, one thread message."""
+    """A handful of short embeds -> a single batch, one reply."""
     embeds = [bot_main._make_language_embed(code, "short") for code in ("es", "en", "fr")]
 
     batches = bot_main._chunk_embeds(embeds)
@@ -572,7 +571,7 @@ def test_chunk_embeds_splits_when_combined_length_exceeds_the_limit():
 
 
 def test_on_message_batches_embeds_past_the_ten_language_cap(tmp_path, monkeypatch):
-    """More than 10 active languages -> multiple thread messages, all embeds still delivered."""
+    """More than 10 active languages -> multiple replies, all embeds still delivered."""
     _use_tmp_store(tmp_path, monkeypatch)
     codes = ["es", "fr", "de", "pt", "it", "ja", "ko", "zh", "ru", "ar", "hi"]
     members = []
@@ -587,7 +586,6 @@ def test_on_message_batches_embeds_past_the_ten_language_cap(tmp_path, monkeypat
 
     asyncio.run(bot_main.on_message(message))  # must not raise
 
-    thread = message.create_thread.return_value
-    assert thread.send.await_count == 2
-    total_embeds = sum(len(call.kwargs["embeds"]) for call in thread.send.call_args_list)
+    assert message.reply.await_count == 2
+    total_embeds = sum(len(call.kwargs["embeds"]) for call in message.reply.call_args_list)
     assert total_embeds == len(codes)
