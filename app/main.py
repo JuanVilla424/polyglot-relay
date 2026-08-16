@@ -6,7 +6,7 @@ from discord.ext import tasks
 
 from app import storage, translator
 from app.config import DISCORD_BOT_TOKEN, LOG_CHANNEL_ID
-from app.lang_codes import ISO_TO_FLORES, to_flores
+from app.lang_codes import ISO_TO_FLORES, ISO_TO_NAME, to_flores
 from app.logger import logger
 
 intents = discord.Intents.default()
@@ -213,9 +213,30 @@ clearrolelanguage.error(_admin_command_error)
 
 @tree.command(name="languages", description="List the language codes this bot supports")
 async def languages(interaction: discord.Interaction):
-    """Show every ISO 639-1 code mapped in app/lang_codes.py."""
-    codes = ", ".join(f"`{code}`" for code in sorted(ISO_TO_FLORES))
-    await interaction.response.send_message(f"Supported language codes: {codes}", ephemeral=True)
+    """Show every ISO 639-1 code mapped in app/lang_codes.py, with its language name."""
+    lines = [f"`{code}` — {ISO_TO_NAME.get(code, '?')}" for code in sorted(ISO_TO_FLORES)]
+    await interaction.response.send_message(
+        "**Supported languages:**\n" + "\n".join(lines), ephemeral=True
+    )
+
+
+@tree.command(name="help", description="List everything this bot can do")
+async def help_command(interaction: discord.Interaction):
+    """Summarize every command in one place instead of relying on Discord's picker."""
+    lines = [
+        "**For yourself**",
+        "`/setlanguage <code>` — set your language for auto-translated DMs",
+        "`/clearlanguage` — remove your language",
+        "`/languages` — list every supported language code",
+        'Right-click a message → Apps → "Translate Message" — one-off translation, works for anyone',
+        "",
+        "**Admin (Manage Server permission)**",
+        "`/setuserlanguage <member> <code>` — set someone else's language for them",
+        "`/clearuserlanguage <member>` — remove another member's language",
+        "`/setrolelanguage <role> <code>` — anyone with that role defaults to this language",
+        "`/clearrolelanguage <role>` — remove a role's language mapping",
+    ]
+    await interaction.response.send_message("\n".join(lines), ephemeral=True)
 
 
 @tree.context_menu(name="Translate Message")

@@ -38,6 +38,39 @@ ISO_TO_FLORES = {
     "ca": "cat_Latn",
 }
 
+ISO_TO_NAME = {
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "pt": "Portuguese",
+    "it": "Italian",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+    "ru": "Russian",
+    "ar": "Arabic",
+    "hi": "Hindi",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "tr": "Turkish",
+    "vi": "Vietnamese",
+    "th": "Thai",
+    "id": "Indonesian",
+    "sv": "Swedish",
+    "el": "Greek",
+    "he": "Hebrew",
+    "uk": "Ukrainian",
+    "cs": "Czech",
+    "ro": "Romanian",
+    "hu": "Hungarian",
+    "fi": "Finnish",
+    "da": "Danish",
+    "no": "Norwegian",
+    "bn": "Bengali",
+    "ca": "Catalan",
+}
+
 
 def to_flores(iso_code: str) -> str | None:
     """Map an ISO 639-1 code to its FLORES-200 equivalent, if supported."""

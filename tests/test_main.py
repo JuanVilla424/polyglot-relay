@@ -53,6 +53,8 @@ def test_commands_are_registered():
     assert "setlanguage" in names
     assert "setuserlanguage" in names
     assert "setrolelanguage" in names
+    assert "languages" in names
+    assert "help" in names
     assert "Translate Message" in names
 
 
@@ -254,15 +256,35 @@ def test_clearrolelanguage_removes_role_mapping(tmp_path, monkeypatch):
 
 
 def test_languages_command_lists_known_codes():
-    """The /languages command surfaces the actual supported codes."""
+    """The /languages command surfaces codes together with their language name."""
     interaction = MagicMock()
     interaction.response.send_message = AsyncMock()
 
     asyncio.run(bot_main.languages.callback(interaction))
 
     sent = interaction.response.send_message.call_args.args[0]
-    assert "`es`" in sent
-    assert "`en`" in sent
+    assert "`es` — Spanish" in sent
+    assert "`en` — English" in sent
+
+
+def test_help_command_lists_every_command():
+    """/help mentions every user-facing and admin command."""
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+
+    asyncio.run(bot_main.help_command.callback(interaction))
+
+    sent = interaction.response.send_message.call_args.args[0]
+    for command in (
+        "/setlanguage",
+        "/clearlanguage",
+        "/languages",
+        "/setuserlanguage",
+        "/clearuserlanguage",
+        "/setrolelanguage",
+        "/clearrolelanguage",
+    ):
+        assert command in sent
 
 
 def test_on_message_ignores_bot_authors(tmp_path, monkeypatch):

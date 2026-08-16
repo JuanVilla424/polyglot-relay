@@ -179,7 +179,8 @@ pre-commit run --all-files
 - **`/clearuserlanguage <member>`** _(admin)_: remove another member's explicit language.
 - **`/setrolelanguage <role> <code>`** _(admin, Manage Server permission)_: any member with that role gets DM translations in that language by default. An explicit `/setlanguage`/`/setuserlanguage` for that person always overrides their role.
 - **`/clearrolelanguage <role>`** _(admin)_: remove a role's language mapping.
-- **`/languages`**: list every language code the bot currently supports.
+- **`/languages`**: list every language code the bot currently supports, with its name.
+- **`/help`**: summary of every command above, in one place.
 - **Right-click a message → Apps → Translate Message**: on-demand ephemeral translation of that one message, visible only to you, regardless of whether you've set a language.
 - **Automatic DMs**: once a member has a language — explicit or via role — every new message from other members (in a channel the bot can read) that isn't already in their language is translated and DMed to them. Members with neither an explicit language nor a mapped role receive nothing — no language is guessed on their behalf. In very active channels this can mean a lot of DMs; there's no per-user throttling, but translation requests to the `nllb` service are capped at 2 concurrent in-flight calls to avoid saturating it during a burst.
 
