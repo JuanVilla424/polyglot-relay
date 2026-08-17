@@ -1,5 +1,6 @@
 """Self-hosted NLLB-200 translation service, served over a small REST API."""
 
+import re
 import threading
 from pathlib import Path
 
@@ -16,6 +17,12 @@ MODEL_DIR = Path("/models/nllb-200-distilled-600M-int8")
 _MIN_DECODING_LENGTH = 256
 _DECODING_LENGTH_MULTIPLIER = 6
 _MAX_DECODING_LENGTH = 2048
+
+# NLLB isn't markdown-aware: a short line like "### Why" gets its heading marker
+# corrupted or dropped inconsistently per target language. Strip these off before
+# translating and reattach them untouched afterwards.
+_HEADER_RE = re.compile(r"^(#{1,6}\s+)")
+_EMOJI_RE = re.compile("^[\U0001f1e6-\U0001f1ff\U00002600-\U000027bf\U0001f300-\U0001faff️]+\\s*")
 
 app = FastAPI()
 _lock = threading.Lock()
@@ -65,6 +72,24 @@ class TranslateResponse(BaseModel):
     translatedText: str
 
 
+def _split_protected_prefix(line: str) -> tuple[str, str]:
+    """Pull a markdown heading marker and/or leading emoji off a line.
+
+    Returns (prefix, rest) — prefix is reattached untouched after translation,
+    rest is what actually gets sent to the model.
+    """
+    prefix = ""
+    header_match = _HEADER_RE.match(line)
+    if header_match:
+        prefix += header_match.group(0)
+        line = line[header_match.end() :]
+    emoji_match = _EMOJI_RE.match(line)
+    if emoji_match:
+        prefix += emoji_match.group(0)
+        line = line[emoji_match.end() :]
+    return prefix, line
+
+
 @app.post("/translate", response_model=TranslateResponse)
 def translate(req: TranslateRequest) -> TranslateResponse:
     """Translate q from the FLORES-200 source code to the target code.
@@ -72,17 +97,29 @@ def translate(req: TranslateRequest) -> TranslateResponse:
     NLLB is a sentence-level model: a long multi-section message (headers, blank
     lines, lists) makes it stop generating early, well before any decoding-length
     cap. Translating line by line and rejoining keeps each call short enough for
-    the model to actually finish.
+    the model to actually finish, and protecting markdown heading markers/emoji
+    per line keeps them from being corrupted in the process.
     """
     translator = _get_translator()
     tokenizer = _get_tokenizer(req.source)
 
     lines = req.q.split("\n")
-    translatable = [i for i, line in enumerate(lines) if line.strip()]
-    if not translatable:
+    prefixes: dict[int, str] = {}
+    texts_to_translate: dict[int, str] = {}
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        prefix, rest = _split_protected_prefix(line)
+        if rest.strip():
+            prefixes[i] = prefix
+            texts_to_translate[i] = rest
+    if not texts_to_translate:
         return TranslateResponse(translatedText=req.q)
 
-    batch = [tokenizer.convert_ids_to_tokens(tokenizer.encode(lines[i])) for i in translatable]
+    indices = list(texts_to_translate)
+    batch = [
+        tokenizer.convert_ids_to_tokens(tokenizer.encode(texts_to_translate[i])) for i in indices
+    ]
     max_decoding_length = min(
         _MAX_DECODING_LENGTH,
         max(
@@ -96,9 +133,10 @@ def translate(req: TranslateRequest) -> TranslateResponse:
     )
 
     translated_lines = list(lines)
-    for index, result in zip(translatable, results):
+    for index, result in zip(indices, results):
         target_tokens = result.hypotheses[0][1:]
-        translated_lines[index] = tokenizer.decode(tokenizer.convert_tokens_to_ids(target_tokens))
+        decoded = tokenizer.decode(tokenizer.convert_tokens_to_ids(target_tokens))
+        translated_lines[index] = prefixes[index] + decoded
 
     return TranslateResponse(translatedText="\n".join(translated_lines))
 
