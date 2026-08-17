@@ -918,6 +918,30 @@ def test_on_message_reactions_mode_adds_flags_without_translating_upfront(tmp_pa
     assert bot_main.ISO_TO_FLAG[bot_main.DEFAULT_SERVER_LANGUAGE] in added_flags
 
 
+def test_on_message_reactions_mode_offers_the_authors_own_configured_language(
+    tmp_path, monkeypatch
+):
+    """Real report: writing in a different language than your own should still offer your flag.
+
+    reply/thread deliberately exclude the author (would auto-translate at
+    them unprompted); reactions mode has no such cost, since it's just an
+    option to click, so the author's own configured language is offered too.
+    """
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reactions")
+    storage.set_user_language(1, 100, "es")
+    message = _make_message(100, content="hello")
+    message.author.guild.id = 1
+    message.author.roles = []
+    message.guild.id = 1
+    monkeypatch.setattr(bot_main.translator, "detect_language", AsyncMock(return_value="en"))
+
+    asyncio.run(bot_main.on_message(message))
+
+    added_flags = {call.args[0] for call in message.add_reaction.call_args_list}
+    assert added_flags == {bot_main.ISO_TO_FLAG["es"]}
+
+
 def test_on_message_uses_reactions_by_default_when_guild_unconfigured(tmp_path, monkeypatch):
     """No /setbehavior ever run for this guild -> flag reactions, not a reply (the new default)."""
     _use_tmp_store(tmp_path, monkeypatch)

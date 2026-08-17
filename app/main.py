@@ -595,6 +595,19 @@ async def _translate_single_language(message: discord.Message, target_lang: str)
 _DELIVERY_MODES = {"reply": _deliver_as_reply, "thread": _deliver_as_thread}
 
 
+def _author_language_for_reactions(message: discord.Message, mode: str) -> str | None:
+    """In reactions mode, the author's own configured language is offered too.
+
+    Unlike reply/thread (which would auto-translate at the author, unprompted
+    noise), a flag is just an option to click -- so it's worth offering for
+    when the author writes in a different language than the one they set for
+    themselves.
+    """
+    if mode != "reactions":
+        return None
+    return _resolve_member_language(message.author)
+
+
 async def _translate_and_deliver(message: discord.Message) -> str:
     """Core auto-translate logic: shared by on_message and the admin retry command.
 
@@ -619,6 +632,9 @@ async def _translate_and_deliver(message: discord.Message) -> str:
         target_languages = _channel_active_languages(message.channel, message.author.id) | {
             server_language
         }
+        author_language = _author_language_for_reactions(message, mode)
+        if author_language:
+            target_languages.add(author_language)
     logger.info(
         "guild %s: %d members cached, active languages in #%s: %s",
         message.guild.id,
