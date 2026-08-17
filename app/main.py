@@ -678,6 +678,19 @@ async def on_message(message: discord.Message):
     await _translate_and_deliver(message)
 
 
+async def _resolve_text_channel(channel_id: int) -> discord.TextChannel | discord.Thread | None:
+    """Look up a channel by ID, falling back to a fetch if it isn't cached."""
+    channel = client.get_channel(channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(channel_id)
+        except discord.HTTPException:
+            return None
+    if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+        return None
+    return channel
+
+
 @client.event
 async def on_raw_reaction_add(payload: discord.RawReactionActionEvent) -> None:
     """In reactions mode, a flag reaction triggers an on-demand translation.
@@ -687,7 +700,12 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent) -> None:
     bot's own reactions — add_reaction() fires this same event, and without
     this guard the bot would translate every message it just flagged.
     """
-    if payload.user_id == client.user.id or payload.guild_id is None:
+    if payload.user_id == client.user.id:
+        logger.info(
+            "ignoring the bot's own reaction %s on message %s", payload.emoji, payload.message_id
+        )
+        return
+    if payload.guild_id is None:
         return
 
     target_lang = FLAG_TO_ISO.get(str(payload.emoji))
@@ -698,13 +716,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent) -> None:
     if mode != "reactions":
         return
 
-    channel = client.get_channel(payload.channel_id)
+    channel = await _resolve_text_channel(payload.channel_id)
     if channel is None:
-        try:
-            channel = await client.fetch_channel(payload.channel_id)
-        except discord.HTTPException:
-            return
-    if not isinstance(channel, (discord.TextChannel, discord.Thread)):
         return
 
     try:
@@ -712,6 +725,13 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent) -> None:
     except discord.HTTPException:
         return
 
+    logger.info(
+        "reaction %s from user %s on message %s -> translating to %s",
+        payload.emoji,
+        payload.user_id,
+        payload.message_id,
+        target_lang,
+    )
     await _translate_single_language(message, target_lang)
 
 
