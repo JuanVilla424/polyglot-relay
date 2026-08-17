@@ -245,3 +245,53 @@ def test_translate_normalizes_typographic_punctuation():
 
     assert response.json() == {"translatedText": "hola - mundo"}
     fake_tokenizer.encode.assert_called_once_with("hello - world")
+
+
+def test_translate_splits_multiple_sentences_within_a_line():
+    """A line with two sentences translates both instead of dropping the second."""
+    first_result = MagicMock()
+    first_result.hypotheses = [["spa_Latn", "Hola."]]
+    second_result = MagicMock()
+    second_result.hypotheses = [["spa_Latn", "Esto es una prueba."]]
+    fake_translator = MagicMock()
+    fake_translator.translate_batch.return_value = [first_result, second_result]
+
+    fake_tokenizer = MagicMock()
+    fake_tokenizer.decode.side_effect = ["Hola.", "Esto es una prueba."]
+
+    with (
+        patch.object(server, "_translator", fake_translator),
+        patch.object(server, "_tokenizers", {"eng_Latn": fake_tokenizer}),
+    ):
+        response = client.post(
+            "/translate",
+            json={"q": "Hello. This is a test.", "source": "eng_Latn", "target": "spa_Latn"},
+        )
+
+    assert response.json() == {"translatedText": "Hola. Esto es una prueba."}
+    batch_arg = fake_translator.translate_batch.call_args.args[0]
+    assert len(batch_arg) == 2
+
+
+def test_translate_splits_sentences_after_stripping_a_heading_marker():
+    """Heading protection and sentence splitting compose correctly on the same line."""
+    first_result = MagicMock()
+    first_result.hypotheses = [["spa_Latn", "Primera."]]
+    second_result = MagicMock()
+    second_result.hypotheses = [["spa_Latn", "Segunda."]]
+    fake_translator = MagicMock()
+    fake_translator.translate_batch.return_value = [first_result, second_result]
+
+    fake_tokenizer = MagicMock()
+    fake_tokenizer.decode.side_effect = ["Primera.", "Segunda."]
+
+    with (
+        patch.object(server, "_translator", fake_translator),
+        patch.object(server, "_tokenizers", {"eng_Latn": fake_tokenizer}),
+    ):
+        response = client.post(
+            "/translate",
+            json={"q": "### First. Second.", "source": "eng_Latn", "target": "spa_Latn"},
+        )
+
+    assert response.json() == {"translatedText": "### Primera. Segunda."}

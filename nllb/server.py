@@ -2,6 +2,7 @@
 
 import re
 import threading
+from collections import defaultdict
 from pathlib import Path
 
 import ctranslate2
@@ -23,6 +24,12 @@ _MAX_DECODING_LENGTH = 2048
 # translating and reattach them untouched afterwards.
 _HEADER_RE = re.compile(r"^(#{1,6}\s+)")
 _EMOJI_RE = re.compile("^[\U0001f1e6-\U0001f1ff\U00002600-\U000027bf\U0001f300-\U0001faff️]+\\s*")
+
+# NLLB also stops early mid-sentence when a single line packs more than one
+# sentence together (very common in prose without a line break per sentence) —
+# split after ./!/? + space, only when followed by a capital letter (avoids
+# splitting on things like "3.5" or an abbreviation followed by lowercase).
+_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+(?=[A-ZÀ-Ý])")
 
 # Typographic punctuation (smart quotes, em/en dash — common from iOS/macOS
 # autocorrect) tokenizes as <unk> in NLLB's vocabulary; the plain ASCII form
@@ -104,36 +111,50 @@ def _split_protected_prefix(line: str) -> tuple[str, str]:
     return prefix, line
 
 
+def _split_into_sentences(text: str) -> list[str]:
+    """Split text into sentences — NLLB stops generating after the first one
+    when a line packs more than one together, silently dropping the rest.
+    """
+    return _SENTENCE_RE.split(text)
+
+
 @app.post("/translate", response_model=TranslateResponse)
 def translate(req: TranslateRequest) -> TranslateResponse:
     """Translate q from the FLORES-200 source code to the target code.
 
     NLLB is a sentence-level model: a long multi-section message (headers, blank
     lines, lists) makes it stop generating early, well before any decoding-length
-    cap. Translating line by line and rejoining keeps each call short enough for
-    the model to actually finish, protecting markdown heading markers/emoji per
-    line keeps them from being corrupted in the process, and normalizing smart
-    punctuation to ASCII avoids <unk> tokens the vocabulary doesn't cover.
+    cap — and the same thing happens within a single line when it packs more than
+    one sentence together. Translating line by line, and sentence by sentence
+    within each line, keeps every call short enough for the model to actually
+    finish. Protecting markdown heading markers/emoji per line keeps them from
+    being corrupted in the process, and normalizing smart punctuation to ASCII
+    avoids <unk> tokens the vocabulary doesn't cover.
     """
     translator = _get_translator()
     tokenizer = _get_tokenizer(req.source)
 
     lines = req.q.split("\n")
     prefixes: dict[int, str] = {}
-    texts_to_translate: dict[int, str] = {}
+    sentences_by_line: dict[int, list[str]] = {}
     for i, line in enumerate(lines):
         if not line.strip():
             continue
         prefix, rest = _split_protected_prefix(line)
-        if rest.strip():
-            prefixes[i] = prefix
-            texts_to_translate[i] = rest.translate(_PUNCTUATION_NORMALIZATION)
-    if not texts_to_translate:
+        if not rest.strip():
+            continue
+        prefixes[i] = prefix
+        sentences_by_line[i] = [s for s in _split_into_sentences(rest) if s.strip()]
+    if not sentences_by_line:
         return TranslateResponse(translatedText=req.q)
 
-    indices = list(texts_to_translate)
+    flat_segments = [
+        (i, sentence.translate(_PUNCTUATION_NORMALIZATION))
+        for i, sentences in sentences_by_line.items()
+        for sentence in sentences
+    ]
     batch = [
-        tokenizer.convert_ids_to_tokens(tokenizer.encode(texts_to_translate[i])) for i in indices
+        tokenizer.convert_ids_to_tokens(tokenizer.encode(sentence)) for _, sentence in flat_segments
     ]
     max_decoding_length = min(
         _MAX_DECODING_LENGTH,
@@ -147,11 +168,15 @@ def translate(req: TranslateRequest) -> TranslateResponse:
         max_decoding_length=max_decoding_length,
     )
 
-    translated_lines = list(lines)
-    for index, result in zip(indices, results):
+    translated_by_line: dict[int, list[str]] = defaultdict(list)
+    for (line_index, _), result in zip(flat_segments, results):
         target_tokens = result.hypotheses[0][1:]
         decoded = tokenizer.decode(tokenizer.convert_tokens_to_ids(target_tokens))
-        translated_lines[index] = prefixes[index] + decoded
+        translated_by_line[line_index].append(decoded)
+
+    translated_lines = list(lines)
+    for i in sentences_by_line:
+        translated_lines[i] = prefixes[i] + " ".join(translated_by_line[i])
 
     return TranslateResponse(translatedText="\n".join(translated_lines))
 
