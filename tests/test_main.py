@@ -222,6 +222,20 @@ def test_resolve_member_language_none_when_unmapped(tmp_path, monkeypatch):
     assert bot_main._resolve_member_language(member) is None
 
 
+def test_channel_member_languages_maps_each_member_to_their_language(tmp_path, monkeypatch):
+    """Unlike the deduplicated set, this keeps the per-member mapping needed for DM delivery."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_role_language(1, 10, "fr")
+    storage.set_user_language(1, 200, "es")
+    member_role_only = _make_member(1, 100, role_ids=[10])
+    member_es = _make_member(1, 200)
+    channel = _make_channel(members=[member_role_only, member_es])
+
+    mapping = bot_main._channel_member_languages(channel, exclude_user_id=999)
+
+    assert mapping == {member_role_only: "fr", member_es: "es"}
+
+
 def test_channel_active_languages_deduplicates_and_merges_roles(tmp_path, monkeypatch):
     """Three members sharing 'es' count once; role and explicit languages both count."""
     _use_tmp_store(tmp_path, monkeypatch)
@@ -450,6 +464,66 @@ def test_on_message_uses_thread_when_guild_configured_for_it(tmp_path, monkeypat
     sent_embeds = thread.send.call_args.kwargs["embeds"]
     assert len(sent_embeds) == 1
     assert sent_embeds[0].title.startswith("es")
+
+
+def test_on_message_dms_each_member_in_their_own_language(tmp_path, monkeypatch):
+    """A guild set to dm mode sends a private DM to each configured member, not a public reply."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 200, "es")
+    storage.set_delivery_mode(1, "dm")
+    member = _make_member(1, 200)
+    member.send = AsyncMock()
+    channel = _make_channel(members=[member])
+    message = _make_message(100, content="hello", channel=channel)
+    message.guild.id = 1
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
+
+    asyncio.run(bot_main.on_message(message))
+
+    message.reply.assert_not_awaited()
+    message.create_thread.assert_not_awaited()
+    member.send.assert_awaited_once()
+    sent_embeds = member.send.call_args.kwargs["embeds"]
+    assert len(sent_embeds) == 1
+    assert sent_embeds[0].title.startswith("es")
+
+
+def test_on_message_dm_mode_skips_members_without_a_language(tmp_path, monkeypatch):
+    """In dm mode, nobody gets an unsolicited DM just because they can see the channel."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "dm")
+    member_no_lang = _make_member(1, 200)
+    member_no_lang.send = AsyncMock()
+    channel = _make_channel(members=[member_no_lang])
+    message = _make_message(100, content="hello", channel=channel)
+    message.guild.id = 1
+    translate_mock = AsyncMock()
+    monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
+
+    asyncio.run(bot_main.on_message(message))
+
+    translate_mock.assert_not_awaited()
+    member_no_lang.send.assert_not_awaited()
+
+
+def test_deliver_as_dm_continues_after_one_member_has_dms_closed():
+    """One member with DMs closed doesn't stop the rest from receiving theirs."""
+    member_ok = _make_member(1, 200)
+    member_ok.send = AsyncMock()
+    response = MagicMock(status=403, reason="Forbidden")
+    member_closed = _make_member(1, 300)
+    member_closed.send = AsyncMock(
+        side_effect=discord.Forbidden(response, "cannot send to this user")
+    )
+    embed = bot_main._make_language_embed("es", "hola")
+
+    status = asyncio.run(
+        bot_main._deliver_as_dm({member_ok: "es", member_closed: "es"}, {"es": [embed]})
+    )
+
+    member_ok.send.assert_awaited_once()
+    member_closed.send.assert_awaited_once()
+    assert status == "Sent 1 DM(s), 1 failed (DMs closed)."
 
 
 def test_on_message_translates_inside_a_thread(tmp_path, monkeypatch):

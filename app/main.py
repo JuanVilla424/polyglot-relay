@@ -46,11 +46,11 @@ def _resolve_member_language(member: discord.Member) -> str | None:
     return None
 
 
-def _channel_active_languages(
+def _channel_member_languages(
     channel: discord.TextChannel | discord.Thread, exclude_user_id: int
-) -> set[str]:
-    """Distinct languages (explicit or role-based) among members who can see this channel."""
-    active_languages: set[str] = set()
+) -> dict[discord.Member, str]:
+    """Map each member who can see this channel to their configured language."""
+    member_languages: dict[discord.Member, str] = {}
     for member in channel.guild.members:
         if member.id == exclude_user_id or member.bot:
             continue
@@ -58,8 +58,15 @@ def _channel_active_languages(
             continue
         language = _resolve_member_language(member)
         if language:
-            active_languages.add(language)
-    return active_languages
+            member_languages[member] = language
+    return member_languages
+
+
+def _channel_active_languages(
+    channel: discord.TextChannel | discord.Thread, exclude_user_id: int
+) -> set[str]:
+    """Distinct languages (explicit or role-based) among members who can see this channel."""
+    return set(_channel_member_languages(channel, exclude_user_id).values())
 
 
 async def _report_language_change(message: str) -> None:
@@ -286,17 +293,18 @@ clearserverlanguage.error(_admin_command_error)
     name="setbehavior",
     description="Admin: choose how translations are delivered in this server",
 )
-@app_commands.describe(mode="Reply inline in the channel, or open a thread")
+@app_commands.describe(mode="Reply inline in the channel, open a thread, or DM each person")
 @app_commands.choices(
     mode=[
         app_commands.Choice(name="Reply in the channel (default)", value="reply"),
         app_commands.Choice(name="Open a thread", value="thread"),
+        app_commands.Choice(name="DM each person privately", value="dm"),
     ]
 )
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.checks.has_permissions(manage_guild=True)
 async def setbehavior(interaction: discord.Interaction, mode: app_commands.Choice[str]):
-    """Let an admin pick reply-in-channel or thread delivery for this guild."""
+    """Let an admin pick reply-in-channel, thread, or DM delivery for this guild."""
     if interaction.guild_id is None:
         await interaction.response.send_message(
             "This command only works inside a server.", ephemeral=True
@@ -366,7 +374,7 @@ async def help_command(interaction: discord.Interaction):
         "`/clearrolelanguage <role>` — remove a role's language mapping",
         "`/setserverlanguage <code>` — set this server's fallback translation language",
         "`/clearserverlanguage` — reset the server's fallback language to the default",
-        "`/setbehavior <mode>` — choose reply-in-channel or thread delivery for this server",
+        "`/setbehavior <mode>` — choose reply-in-channel, thread, or DM delivery for this server",
         "`/clearbehavior` — reset translation delivery to the default (reply)",
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
@@ -493,6 +501,29 @@ async def _deliver_as_thread(message: discord.Message, embeds: list[discord.Embe
     return "Thread created."
 
 
+async def _deliver_as_dm(
+    member_languages: dict[discord.Member, str], embeds_by_lang: dict[str, list[discord.Embed]]
+) -> str:
+    """DM each member their translation privately, in their own configured language."""
+    sent = 0
+    failed = 0
+    for member, language in member_languages.items():
+        embeds = embeds_by_lang.get(language)
+        if not embeds:
+            continue
+        try:
+            for batch in _chunk_embeds(embeds):
+                await member.send(embeds=batch)
+            sent += 1
+        except discord.HTTPException:
+            logger.warning("could not DM %s (id=%s), likely has DMs closed", member, member.id)
+            failed += 1
+
+    if not failed:
+        return f"Sent {sent} DM(s)."
+    return f"Sent {sent} DM(s), {failed} failed (DMs closed)."
+
+
 _DELIVERY_MODES = {"reply": _deliver_as_reply, "thread": _deliver_as_thread}
 
 
@@ -504,10 +535,22 @@ async def _translate_and_deliver(message: discord.Message) -> str:
     if not isinstance(message.channel, (discord.TextChannel, discord.Thread)):
         return "This only works in a text channel or thread."
 
-    server_language = storage.get_server_language(message.guild.id) or DEFAULT_SERVER_LANGUAGE
-    target_languages = _channel_active_languages(message.channel, message.author.id) | {
-        server_language
-    }
+    if isinstance(message.channel, discord.Thread):
+        mode = "reply"  # Discord doesn't support nesting a thread in a thread
+    else:
+        mode = storage.get_delivery_mode(message.guild.id) or DEFAULT_DELIVERY_MODE
+
+    member_languages: dict[discord.Member, str] = {}
+    if mode == "dm":
+        # No server-language fallback here: DM only goes to people who actually
+        # configured a language, never as an unsolicited private message.
+        member_languages = _channel_member_languages(message.channel, message.author.id)
+        target_languages = set(member_languages.values())
+    else:
+        server_language = storage.get_server_language(message.guild.id) or DEFAULT_SERVER_LANGUAGE
+        target_languages = _channel_active_languages(message.channel, message.author.id) | {
+            server_language
+        }
     logger.info(
         "guild %s: %d members cached, active languages in #%s: %s",
         message.guild.id,
@@ -516,7 +559,7 @@ async def _translate_and_deliver(message: discord.Message) -> str:
         sorted(target_languages),
     )
 
-    embeds = []
+    embeds_by_lang: dict[str, list[discord.Embed]] = {}
     for target_lang in sorted(target_languages):
         try:
             translated, detected = await translator.translate(message.content, target_lang)
@@ -527,16 +570,16 @@ async def _translate_and_deliver(message: discord.Message) -> str:
         if detected == target_lang:
             continue
 
-        embeds.extend(_make_language_embeds(target_lang, translated))
+        embeds_by_lang[target_lang] = _make_language_embeds(target_lang, translated)
 
-    if not embeds:
+    if not embeds_by_lang:
         return "Nothing to translate (already matches every active language)."
 
-    if isinstance(message.channel, discord.Thread):
-        deliver = _deliver_as_reply  # Discord doesn't support nesting a thread in a thread
-    else:
-        mode = storage.get_delivery_mode(message.guild.id) or DEFAULT_DELIVERY_MODE
-        deliver = _DELIVERY_MODES.get(mode, _deliver_as_reply)
+    if mode == "dm":
+        return await _deliver_as_dm(member_languages, embeds_by_lang)
+
+    embeds = [embed for lang_embeds in embeds_by_lang.values() for embed in lang_embeds]
+    deliver = _DELIVERY_MODES.get(mode, _deliver_as_reply)
     return await deliver(message, embeds)
 
 
