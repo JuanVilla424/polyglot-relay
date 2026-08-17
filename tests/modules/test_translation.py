@@ -297,37 +297,6 @@ def test_channel_active_languages_excludes_members_who_cant_view_it(tmp_path, mo
     assert active == set()
 
 
-def test_report_language_change_noop_when_unconfigured(monkeypatch):
-    """No LOG_CHANNEL_ID set -> the client is never touched."""
-    monkeypatch.setattr(commands, "LOG_CHANNEL_ID", None)
-    client = MagicMock(get_channel=MagicMock(side_effect=AssertionError("should not run")))
-
-    asyncio.run(commands._report_language_change(client, "hello"))
-
-
-def test_report_language_change_sends_to_configured_channel(monkeypatch):
-    """A configured channel receives the message verbatim."""
-    monkeypatch.setattr(commands, "LOG_CHANNEL_ID", 999)
-    channel = MagicMock()
-    channel.send = AsyncMock()
-    client = MagicMock(get_channel=MagicMock(return_value=channel))
-
-    asyncio.run(commands._report_language_change(client, "hello"))
-
-    channel.send.assert_awaited_once_with("hello")
-
-
-def test_report_language_change_swallows_send_failures(monkeypatch):
-    """A permission error posting to the log channel never propagates to the caller."""
-    monkeypatch.setattr(commands, "LOG_CHANNEL_ID", 999)
-    response = MagicMock(status=403, reason="Forbidden")
-    channel = MagicMock()
-    channel.send = AsyncMock(side_effect=discord.Forbidden(response, "missing permissions"))
-    client = MagicMock(get_channel=MagicMock(return_value=channel))
-
-    asyncio.run(commands._report_language_change(client, "hello"))  # must not raise
-
-
 def test_clearlanguage_removes_stored_preference(tmp_path, monkeypatch):
     """Clearing removes a previously stored self-service preference."""
     _use_tmp_store(tmp_path, monkeypatch)

@@ -1,7 +1,7 @@
 import discord
 from discord import app_commands
 
-from app.config import LOG_CHANNEL_ID
+from app.discord_utils import report_to_log_channel as _report_language_change
 from app.logger import logger
 from app.modules.translation import storage, translator
 from app.modules.translation.lang_codes import ISO_TO_FLORES, ISO_TO_NAME, to_flores
@@ -11,17 +11,6 @@ from app.modules.translation.logic import (
     _resolve_member_language,
     _translate_and_deliver,
 )
-
-
-async def _report_language_change(client: discord.Client, message: str) -> None:
-    """Best-effort post to the configured log channel; never breaks the caller."""
-    if LOG_CHANNEL_ID is None:
-        return
-    try:
-        channel = client.get_channel(LOG_CHANNEL_ID) or await client.fetch_channel(LOG_CHANNEL_ID)
-        await channel.send(message)
-    except (discord.Forbidden, discord.NotFound, discord.HTTPException):
-        logger.warning("could not post to log channel %s", LOG_CHANNEL_ID)
 
 
 async def _admin_command_error(

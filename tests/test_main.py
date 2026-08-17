@@ -307,6 +307,25 @@ def test_polyglot_modules_enables_a_module_for_the_guild(tmp_path, monkeypatch):
     assert storage.is_module_enabled(1, "events") is True
 
 
+def test_polyglot_modules_reports_to_the_configured_log_channel(tmp_path, monkeypatch):
+    """Real bug report: this command never reached the log channel other commands do."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(bot_main.discord_utils, "LOG_CHANNEL_ID", 999)
+    log_channel = MagicMock()
+    log_channel.send = AsyncMock()
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.client.get_channel = MagicMock(return_value=log_channel)
+    interaction.response.send_message = AsyncMock()
+    action = discord.app_commands.Choice(name="Enable", value="enable")
+    module = discord.app_commands.Choice(name="Events", value="events")
+
+    asyncio.run(bot_main.polyglot_modules.callback(interaction, action, module))
+
+    log_channel.send.assert_awaited_once()
+    assert "events" in log_channel.send.call_args.args[0]
+
+
 def test_polyglot_modules_disables_a_module_for_the_guild(tmp_path, monkeypatch):
     """An admin can turn off a module (e.g. translation) for their server."""
     _use_tmp_store(tmp_path, monkeypatch)

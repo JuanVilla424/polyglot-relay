@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from app import storage
+from app import discord_utils, storage
 from app.config import DISCORD_BOT_TOKEN
 from app.logger import logger
 from app.modules import MODULES
@@ -109,6 +109,11 @@ async def polyglot_modules(
     await interaction.response.send_message(
         f"`{module.value}` module {'enabled' if enabled else 'disabled'} for this server.",
         ephemeral=True,
+    )
+    await discord_utils.report_to_log_channel(
+        interaction.client,
+        f"🌐 {interaction.user.mention} {'enabled' if enabled else 'disabled'} "
+        f"the `{module.value}` module",
     )
 
 
