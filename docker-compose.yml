@@ -21,6 +21,10 @@ services:
     restart: always
     expose:
       - "8000"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
     healthcheck:
       test: ["CMD", "python", "healthcheck.py"]
       interval: 10s
