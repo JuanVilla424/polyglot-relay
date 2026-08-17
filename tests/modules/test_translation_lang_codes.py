@@ -1,4 +1,10 @@
-from app.lang_codes import ISO_TO_FLORES, ISO_TO_NAME, LANGUAGE_COLORS, color_for, to_flores
+from app.modules.translation.lang_codes import (
+    ISO_TO_FLORES,
+    ISO_TO_NAME,
+    LANGUAGE_COLORS,
+    color_for,
+    to_flores,
+)
 
 
 def test_to_flores_maps_known_codes():
