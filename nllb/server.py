@@ -24,6 +24,20 @@ _MAX_DECODING_LENGTH = 2048
 _HEADER_RE = re.compile(r"^(#{1,6}\s+)")
 _EMOJI_RE = re.compile("^[\U0001f1e6-\U0001f1ff\U00002600-\U000027bf\U0001f300-\U0001faff️]+\\s*")
 
+# Typographic punctuation (smart quotes, em/en dash — common from iOS/macOS
+# autocorrect) tokenizes as <unk> in NLLB's vocabulary; the plain ASCII form
+# doesn't. Ellipsis ("…") is deliberately not included: it tokenizes fine.
+_PUNCTUATION_NORMALIZATION = str.maketrans(
+    {
+        "—": "-",
+        "–": "-",
+        "“": '"',
+        "”": '"',
+        "‘": "'",
+        "’": "'",
+    }
+)
+
 app = FastAPI()
 _lock = threading.Lock()
 _translator: ctranslate2.Translator | None = None
@@ -97,8 +111,9 @@ def translate(req: TranslateRequest) -> TranslateResponse:
     NLLB is a sentence-level model: a long multi-section message (headers, blank
     lines, lists) makes it stop generating early, well before any decoding-length
     cap. Translating line by line and rejoining keeps each call short enough for
-    the model to actually finish, and protecting markdown heading markers/emoji
-    per line keeps them from being corrupted in the process.
+    the model to actually finish, protecting markdown heading markers/emoji per
+    line keeps them from being corrupted in the process, and normalizing smart
+    punctuation to ASCII avoids <unk> tokens the vocabulary doesn't cover.
     """
     translator = _get_translator()
     tokenizer = _get_tokenizer(req.source)
@@ -112,7 +127,7 @@ def translate(req: TranslateRequest) -> TranslateResponse:
         prefix, rest = _split_protected_prefix(line)
         if rest.strip():
             prefixes[i] = prefix
-            texts_to_translate[i] = rest
+            texts_to_translate[i] = rest.translate(_PUNCTUATION_NORMALIZATION)
     if not texts_to_translate:
         return TranslateResponse(translatedText=req.q)
 

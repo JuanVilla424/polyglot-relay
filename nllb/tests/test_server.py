@@ -222,3 +222,26 @@ def test_translate_skips_the_translator_for_a_heading_only_line():
 
     assert response.json() == {"translatedText": "### "}
     fake_translator.translate_batch.assert_not_called()
+
+
+def test_translate_normalizes_typographic_punctuation():
+    """An em dash gets normalized to a plain hyphen before it ever reaches the tokenizer."""
+    fake_result = MagicMock()
+    fake_result.hypotheses = [["spa_Latn", "hola - mundo"]]
+    fake_translator = MagicMock()
+    fake_translator.translate_batch.return_value = [fake_result]
+
+    fake_tokenizer = MagicMock()
+    fake_tokenizer.decode.return_value = "hola - mundo"
+
+    with (
+        patch.object(server, "_translator", fake_translator),
+        patch.object(server, "_tokenizers", {"eng_Latn": fake_tokenizer}),
+    ):
+        response = client.post(
+            "/translate",
+            json={"q": "hello — world", "source": "eng_Latn", "target": "spa_Latn"},
+        )
+
+    assert response.json() == {"translatedText": "hola - mundo"}
+    fake_tokenizer.encode.assert_called_once_with("hello - world")
