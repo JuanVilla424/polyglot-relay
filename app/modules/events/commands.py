@@ -105,6 +105,15 @@ async def createvent(  # pylint: disable=too-many-arguments,too-many-positional-
         except discord.HTTPException:
             logger.warning("could not add RSVP reaction %s to event %s", emoji, sent.id)
 
+    logger.info(
+        "event %s %r created by %s in guild %s, scheduled for %s",
+        sent.id,
+        title,
+        interaction.user.id,
+        interaction.guild_id,
+        event_timestamp,
+    )
+
 
 createvent.error(_admin_command_error)
 
@@ -161,6 +170,7 @@ async def cancel_event(interaction: discord.Interaction, message: discord.Messag
         await message.reply("🚫 This event was cancelled.", mention_author=False)
     except discord.HTTPException:
         logger.warning("could not post the cancellation notice for event %s", message.id)
+    logger.info("event %s cancelled by %s", message.id, interaction.user.id)
     await interaction.response.send_message("Event cancelled.", ephemeral=True)
 
 

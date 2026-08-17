@@ -22,6 +22,9 @@ async def _update_rsvp(
     else:
         event["rsvps"][str(payload.user_id)] = status
     storage.save_event(payload.message_id, event)
+    logger.info(
+        "user %s RSVP'd %s on event %s", payload.user_id, status or "cleared", payload.message_id
+    )
 
     channel = await resolve_text_channel(client, payload.channel_id)
     if channel is None:

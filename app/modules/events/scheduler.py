@@ -17,6 +17,7 @@ async def _send_reminder(channel: discord.abc.Messageable, event: dict, offset: 
         text = f"⏰ **{event['title']}** starts <t:{event['timestamp']}:R> {mentions}".strip()
     try:
         await channel.send(text)
+        logger.info("sent the %s-minute reminder for event %r", offset, event["title"])
     except discord.HTTPException:
         logger.warning("could not send a reminder for event %s", event["title"])
 
