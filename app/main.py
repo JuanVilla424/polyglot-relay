@@ -30,9 +30,9 @@ HEARTBEAT_PATH = Path("/tmp/healthy")
 # this per guild with /setserverlanguage; this is only the built-in fallback.
 DEFAULT_SERVER_LANGUAGE = "en"
 
-# How translations get posted: a native reply in-channel, or a thread on the
-# original message. An admin can override this per guild with /setbehavior.
-DEFAULT_DELIVERY_MODE = "reply"
+# How translations get posted: reply in-channel, thread, DM, or flag reactions
+# (translate on demand). An admin can override this per guild with /setbehavior.
+DEFAULT_DELIVERY_MODE = "reactions"
 
 
 @tasks.loop(seconds=30)
@@ -305,10 +305,12 @@ clearserverlanguage.error(_admin_command_error)
 )
 @app_commands.choices(
     mode=[
-        app_commands.Choice(name="Reply in the channel (default)", value="reply"),
+        app_commands.Choice(name="Reply in the channel", value="reply"),
         app_commands.Choice(name="Open a thread", value="thread"),
         app_commands.Choice(name="DM each person privately", value="dm"),
-        app_commands.Choice(name="Flag reactions (translate on demand)", value="reactions"),
+        app_commands.Choice(
+            name="Flag reactions, translate on demand (default)", value="reactions"
+        ),
     ]
 )
 @app_commands.default_permissions(manage_guild=True)

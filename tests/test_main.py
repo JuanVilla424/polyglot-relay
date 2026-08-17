@@ -446,9 +446,11 @@ def test_on_message_replies_with_combined_translations(tmp_path, monkeypatch):
     """A channel with an active language gets a reply with the translation."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_user_language(1, 200, "es")
+    storage.set_delivery_mode(1, "reply")
     member = _make_member(1, 200)
     channel = _make_channel(members=[member])
     message = _make_message(100, content="hello", channel=channel)
+    message.guild.id = 1
     monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
 
     asyncio.run(bot_main.on_message(message))
@@ -580,9 +582,11 @@ def test_on_message_no_reply_when_detected_already_matches(tmp_path, monkeypatch
     """No reply noise when the detected language already matches the only active one."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_user_language(1, 200, "en")
+    storage.set_delivery_mode(1, "reply")
     member = _make_member(1, 200)
     channel = _make_channel(members=[member])
     message = _make_message(100, content="hello", channel=channel)
+    message.guild.id = 1
     monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hello", "en")))
 
     asyncio.run(bot_main.on_message(message))
@@ -593,7 +597,9 @@ def test_on_message_no_reply_when_detected_already_matches(tmp_path, monkeypatch
 def test_on_message_falls_back_to_server_language_with_no_configured_members(tmp_path, monkeypatch):
     """An empty channel still gets a server-language reply for a non-server-language message."""
     _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reply")
     message = _make_message(100, content="hola")
+    message.guild.id = 1
     monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("Hello", "es")))
 
     asyncio.run(bot_main.on_message(message))
@@ -608,7 +614,9 @@ def test_on_message_falls_back_to_server_language_with_no_configured_members(tmp
 def test_on_message_no_reply_when_already_in_server_language(tmp_path, monkeypatch):
     """A message already in the server language, with no one else configured, gets no reply."""
     _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reply")
     message = _make_message(100, content="hello")
+    message.guild.id = 1
     translate_mock = AsyncMock(return_value=("hello", bot_main.DEFAULT_SERVER_LANGUAGE))
     monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
 
@@ -621,6 +629,7 @@ def test_on_message_uses_guild_server_language_override(tmp_path, monkeypatch):
     """A guild-configured server language wins over the built-in default."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_server_language(1, "es")
+    storage.set_delivery_mode(1, "reply")
     message = _make_message(100, content="hello")
     message.guild.id = 1
     monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
@@ -638,9 +647,11 @@ def test_on_message_handles_reply_failure_gracefully(tmp_path, monkeypatch):
     """A permission error sending the reply doesn't raise out of the handler."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_user_language(1, 200, "es")
+    storage.set_delivery_mode(1, "reply")
     member = _make_member(1, 200)
     channel = _make_channel(members=[member])
     message = _make_message(100, content="hello", channel=channel)
+    message.guild.id = 1
     response = MagicMock(status=403, reason="Forbidden")
     message.reply = AsyncMock(side_effect=discord.Forbidden(response, "no perms"))
     monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
@@ -665,9 +676,11 @@ def test_retry_translation_replies_and_reports_status(tmp_path, monkeypatch):
     """A successful retry defers, runs the same logic as on_message, then reports success."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_user_language(1, 200, "es")
+    storage.set_delivery_mode(1, "reply")
     member = _make_member(1, 200)
     channel = _make_channel(members=[member])
     message = _make_message(100, content="hello", channel=channel)
+    message.guild.id = 1
     interaction = MagicMock()
     interaction.response.defer = AsyncMock()
     interaction.followup.send = AsyncMock()
@@ -683,7 +696,9 @@ def test_retry_translation_replies_and_reports_status(tmp_path, monkeypatch):
 def test_retry_translation_reports_when_nothing_to_translate(tmp_path, monkeypatch):
     """No active languages -> the admin gets told nothing happened, not silence."""
     _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reply")
     message = _make_message(100, content="hello")
+    message.guild.id = 1
     interaction = MagicMock()
     interaction.response.defer = AsyncMock()
     interaction.followup.send = AsyncMock()
@@ -772,6 +787,7 @@ def test_chunk_embeds_splits_when_combined_length_exceeds_the_limit():
 def test_on_message_batches_embeds_past_the_ten_language_cap(tmp_path, monkeypatch):
     """More than 10 active languages -> multiple replies, all embeds still delivered."""
     _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reply")
     codes = ["es", "fr", "de", "pt", "it", "ja", "ko", "zh", "ru", "ar", "hi"]
     members = []
     for i, lang in enumerate(codes):
@@ -779,6 +795,7 @@ def test_on_message_batches_embeds_past_the_ten_language_cap(tmp_path, monkeypat
         members.append(_make_member(1, 200 + i))
     channel = _make_channel(members=members)
     message = _make_message(100, content="hello", channel=channel)
+    message.guild.id = 1
     monkeypatch.setattr(
         bot_main.translator, "translate", AsyncMock(return_value=("translated", "en"))
     )
@@ -862,6 +879,25 @@ def test_on_message_reactions_mode_adds_flags_without_translating_upfront(tmp_pa
     added_flags = {call.args[0] for call in message.add_reaction.call_args_list}
     assert bot_main.ISO_TO_FLAG["es"] in added_flags
     assert bot_main.ISO_TO_FLAG[bot_main.DEFAULT_SERVER_LANGUAGE] in added_flags
+
+
+def test_on_message_uses_reactions_by_default_when_guild_unconfigured(tmp_path, monkeypatch):
+    """No /setbehavior ever run for this guild -> flag reactions, not a reply (the new default)."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 200, "es")
+    member = _make_member(1, 200)
+    channel = _make_channel(members=[member])
+    message = _make_message(100, content="hello", channel=channel)
+    message.guild.id = 1
+    translate_mock = AsyncMock()
+    monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
+
+    asyncio.run(bot_main.on_message(message))
+
+    message.reply.assert_not_awaited()
+    translate_mock.assert_not_awaited()
+    added_flags = {call.args[0] for call in message.add_reaction.call_args_list}
+    assert bot_main.ISO_TO_FLAG["es"] in added_flags
 
 
 def test_on_raw_reaction_add_ignores_the_bots_own_reaction(tmp_path, monkeypatch):
