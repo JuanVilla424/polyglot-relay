@@ -414,16 +414,37 @@ async def on_ready():
 
 DISCORD_EMBEDS_PER_MESSAGE = 10
 DISCORD_EMBED_TOTAL_CHAR_LIMIT = 5500  # conservative margin under Discord's 6000 cap
+DISCORD_EMBED_DESCRIPTION_LIMIT = 4096
 
 
-def _make_language_embed(target_lang: str, translated: str) -> discord.Embed:
-    """One color-coded embed per language, so languages are distinguishable at a glance."""
+def _make_language_embed(
+    target_lang: str, translated: str, part: tuple[int, int] | None = None
+) -> discord.Embed:
+    """One color-coded embed per language, so languages are distinguishable at a glance.
+
+    `part` is (index, total) when a translation had to be split across multiple
+    embeds because it exceeds Discord's per-embed description limit.
+    """
     name = ISO_TO_NAME.get(target_lang, target_lang)
-    return discord.Embed(
-        title=f"{target_lang} — {name}",
-        description=translated[:4096],
-        color=color_for(target_lang),
-    )
+    title = f"{target_lang} — {name}"
+    if part:
+        title += f" ({part[0]}/{part[1]})"
+    return discord.Embed(title=title, description=translated, color=color_for(target_lang))
+
+
+def _make_language_embeds(target_lang: str, translated: str) -> list[discord.Embed]:
+    """Split a translation across multiple embeds instead of silently truncating it
+    at Discord's 4096-char embed description limit.
+    """
+    chunks = [
+        translated[i : i + DISCORD_EMBED_DESCRIPTION_LIMIT]
+        for i in range(0, len(translated), DISCORD_EMBED_DESCRIPTION_LIMIT)
+    ] or [""]
+    total = len(chunks)
+    return [
+        _make_language_embed(target_lang, chunk, part=(index + 1, total) if total > 1 else None)
+        for index, chunk in enumerate(chunks)
+    ]
 
 
 def _chunk_embeds(embeds: list[discord.Embed]) -> list[list[discord.Embed]]:
@@ -506,7 +527,7 @@ async def _translate_and_deliver(message: discord.Message) -> str:
         if detected == target_lang:
             continue
 
-        embeds.append(_make_language_embed(target_lang, translated))
+        embeds.extend(_make_language_embeds(target_lang, translated))
 
     if not embeds:
         return "Nothing to translate (already matches every active language)."

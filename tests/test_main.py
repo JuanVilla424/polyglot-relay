@@ -618,6 +618,27 @@ def test_make_language_embed_sets_title_description_and_color():
     assert embed.color.value == bot_main.color_for("es")
 
 
+def test_make_language_embeds_returns_one_embed_for_short_text():
+    """Text under the 4096-char limit stays a single embed, no part suffix."""
+    embeds = bot_main._make_language_embeds("es", "hola")
+
+    assert len(embeds) == 1
+    assert embeds[0].title == "es — Spanish"
+    assert embeds[0].description == "hola"
+
+
+def test_make_language_embeds_splits_long_text_without_losing_any_of_it():
+    """A translation over 4096 chars splits into numbered embeds, content fully preserved."""
+    long_text = "a" * 5000
+
+    embeds = bot_main._make_language_embeds("es", long_text)
+
+    assert len(embeds) == 2
+    assert embeds[0].title == "es — Spanish (1/2)"
+    assert embeds[1].title == "es — Spanish (2/2)"
+    assert embeds[0].description + embeds[1].description == long_text
+
+
 def test_color_for_is_deterministic_and_reused_past_eight_codes():
     """Same code -> same color every time; the 8-slot palette cycles for the 9th+ code."""
     codes = list(bot_main.ISO_TO_FLORES)
