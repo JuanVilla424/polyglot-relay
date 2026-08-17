@@ -26,9 +26,9 @@ def _make_member(guild_id, user_id, role_ids=()):
     return member
 
 
-def _make_channel(members=(), hidden_from=()):
-    """A TextChannel-spec'd mock; members in hidden_from can't view_channel."""
-    channel = MagicMock(spec=discord.TextChannel)
+def _make_channel(members=(), hidden_from=(), channel_cls=discord.TextChannel):
+    """A TextChannel- or Thread-spec'd mock; members in hidden_from can't view_channel."""
+    channel = MagicMock(spec=channel_cls)
     channel.guild.members = list(members)
     hidden = set(hidden_from)
 
@@ -450,6 +450,39 @@ def test_on_message_uses_thread_when_guild_configured_for_it(tmp_path, monkeypat
     sent_embeds = thread.send.call_args.kwargs["embeds"]
     assert len(sent_embeds) == 1
     assert sent_embeds[0].title.startswith("es")
+
+
+def test_on_message_translates_inside_a_thread(tmp_path, monkeypatch):
+    """A message posted inside a thread (e.g. a forum post) is translated too."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 200, "es")
+    member = _make_member(1, 200)
+    channel = _make_channel(members=[member], channel_cls=discord.Thread)
+    message = _make_message(100, content="hello", channel=channel)
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
+
+    asyncio.run(bot_main.on_message(message))
+
+    message.reply.assert_awaited_once()
+    sent_embeds = message.reply.call_args.kwargs["embeds"]
+    assert sent_embeds[0].title.startswith("es")
+
+
+def test_on_message_inside_a_thread_ignores_thread_delivery_mode(tmp_path, monkeypatch):
+    """Can't nest a thread in a thread: falls back to reply even if the guild wants thread mode."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 200, "es")
+    storage.set_delivery_mode(1, "thread")
+    member = _make_member(1, 200)
+    channel = _make_channel(members=[member], channel_cls=discord.Thread)
+    message = _make_message(100, content="hello", channel=channel)
+    message.guild.id = 1
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
+
+    asyncio.run(bot_main.on_message(message))
+
+    message.reply.assert_awaited_once()
+    message.create_thread.assert_not_awaited()
 
 
 def test_on_message_no_reply_when_detected_already_matches(tmp_path, monkeypatch):

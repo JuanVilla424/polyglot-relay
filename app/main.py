@@ -46,7 +46,9 @@ def _resolve_member_language(member: discord.Member) -> str | None:
     return None
 
 
-def _channel_active_languages(channel: discord.TextChannel, exclude_user_id: int) -> set[str]:
+def _channel_active_languages(
+    channel: discord.TextChannel | discord.Thread, exclude_user_id: int
+) -> set[str]:
     """Distinct languages (explicit or role-based) among members who can see this channel."""
     active_languages: set[str] = set()
     for member in channel.guild.members:
@@ -478,8 +480,8 @@ async def _translate_and_deliver(message: discord.Message) -> str:
 
     Returns a short human-readable status, used by the retry command's response.
     """
-    if not isinstance(message.channel, discord.TextChannel):
-        return "This only works in a text channel."
+    if not isinstance(message.channel, (discord.TextChannel, discord.Thread)):
+        return "This only works in a text channel or thread."
 
     server_language = storage.get_server_language(message.guild.id) or DEFAULT_SERVER_LANGUAGE
     target_languages = _channel_active_languages(message.channel, message.author.id) | {
@@ -509,8 +511,11 @@ async def _translate_and_deliver(message: discord.Message) -> str:
     if not embeds:
         return "Nothing to translate (already matches every active language)."
 
-    mode = storage.get_delivery_mode(message.guild.id) or DEFAULT_DELIVERY_MODE
-    deliver = _DELIVERY_MODES.get(mode, _deliver_as_reply)
+    if isinstance(message.channel, discord.Thread):
+        deliver = _deliver_as_reply  # Discord doesn't support nesting a thread in a thread
+    else:
+        mode = storage.get_delivery_mode(message.guild.id) or DEFAULT_DELIVERY_MODE
+        deliver = _DELIVERY_MODES.get(mode, _deliver_as_reply)
     return await deliver(message, embeds)
 
 
