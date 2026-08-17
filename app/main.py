@@ -539,12 +539,22 @@ async def _deliver_as_dm(
 async def _deliver_as_reactions(message: discord.Message, target_languages: set[str]) -> str:
     """Add one flag reaction per active language; translation happens on demand.
 
-    Nothing gets translated here — a flag only appears as a hint of which
-    languages are active. Languages without a known flag (e.g. Catalan) are
-    skipped rather than failing the whole batch.
+    No translation happens here — but the message's own language is still
+    detected (a cheap LibreTranslate-only call, not a full NLLB translation)
+    so its flag is skipped: offering to "translate" a message into the
+    language it's already written in is just noise. Languages without a known
+    flag (e.g. Catalan) are skipped too, rather than failing the whole batch.
     """
+    try:
+        detected = await translator.detect_language(message.content)
+    except Exception:
+        logger.exception("language detection failed before adding reactions")
+        detected = None
+
     added = 0
     for target_lang in sorted(target_languages):
+        if target_lang == detected:
+            continue
         flag = ISO_TO_FLAG.get(target_lang)
         if not flag:
             continue
@@ -555,7 +565,7 @@ async def _deliver_as_reactions(message: discord.Message, target_languages: set[
             logger.warning("could not add reaction %s to message %s", flag, message.id)
 
     if not added:
-        return "No flags to add (no known flag for the active languages)."
+        return "No flags to add (message already matches every active language, or no known flag)."
     return f"Added {added} flag reaction(s)."
 
 

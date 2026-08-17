@@ -827,6 +827,7 @@ def test_deliver_as_reactions_adds_one_flag_per_language(monkeypatch):
     message = _make_message(100, content="hello")
     translate_mock = AsyncMock()
     monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
+    monkeypatch.setattr(bot_main.translator, "detect_language", AsyncMock(return_value="en"))
 
     status = asyncio.run(bot_main._deliver_as_reactions(message, {"es", "fr"}))
 
@@ -837,19 +838,54 @@ def test_deliver_as_reactions_adds_one_flag_per_language(monkeypatch):
     translate_mock.assert_not_awaited()
 
 
-def test_deliver_as_reactions_skips_languages_without_a_known_flag():
+def test_deliver_as_reactions_skips_the_flag_matching_the_detected_language(monkeypatch):
+    """Real bug report: writing in a language shouldn't get offered a same-language 'translation'.
+
+    E.g. the server's fallback language is active and someone writes in that
+    exact language -- no flag for it should appear, since translating it into
+    itself is a no-op.
+    """
+    message = _make_message(100, content="hello")
+    monkeypatch.setattr(bot_main.translator, "detect_language", AsyncMock(return_value="en"))
+
+    status = asyncio.run(bot_main._deliver_as_reactions(message, {"en", "it"}))
+
+    added_flags = {call.args[0] for call in message.add_reaction.call_args_list}
+    assert added_flags == {bot_main.ISO_TO_FLAG["it"]}
+    assert status == "Added 1 flag reaction(s)."
+
+
+def test_deliver_as_reactions_falls_back_to_adding_every_flag_if_detection_fails(monkeypatch):
+    """A LibreTranslate hiccup shouldn't block flags entirely -- fall back to the old behavior."""
+    message = _make_message(100, content="hello")
+    monkeypatch.setattr(
+        bot_main.translator, "detect_language", AsyncMock(side_effect=RuntimeError("boom"))
+    )
+
+    status = asyncio.run(bot_main._deliver_as_reactions(message, {"es", "fr"}))
+
+    assert message.add_reaction.await_count == 2
+    assert status == "Added 2 flag reaction(s)."
+
+
+def test_deliver_as_reactions_skips_languages_without_a_known_flag(monkeypatch):
     """Catalan has no distinct flag in ISO_TO_FLAG; it's skipped, not an error."""
     message = _make_message(100, content="hello")
+    monkeypatch.setattr(bot_main.translator, "detect_language", AsyncMock(return_value="en"))
 
     status = asyncio.run(bot_main._deliver_as_reactions(message, {"ca"}))
 
     message.add_reaction.assert_not_awaited()
-    assert status == "No flags to add (no known flag for the active languages)."
+    assert (
+        status
+        == "No flags to add (message already matches every active language, or no known flag)."
+    )
 
 
-def test_deliver_as_reactions_continues_after_one_reaction_fails():
+def test_deliver_as_reactions_continues_after_one_reaction_fails(monkeypatch):
     """One flag failing to add (e.g. a permission hiccup) doesn't stop the rest."""
     message = _make_message(100, content="hello")
+    monkeypatch.setattr(bot_main.translator, "detect_language", AsyncMock(return_value="en"))
     response = MagicMock(status=403, reason="Forbidden")
     message.add_reaction = AsyncMock(side_effect=[discord.Forbidden(response, "no perms"), None])
 
@@ -870,6 +906,7 @@ def test_on_message_reactions_mode_adds_flags_without_translating_upfront(tmp_pa
     message.guild.id = 1
     translate_mock = AsyncMock()
     monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
+    monkeypatch.setattr(bot_main.translator, "detect_language", AsyncMock(return_value="fr"))
 
     asyncio.run(bot_main.on_message(message))
 
@@ -891,6 +928,7 @@ def test_on_message_uses_reactions_by_default_when_guild_unconfigured(tmp_path, 
     message.guild.id = 1
     translate_mock = AsyncMock()
     monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
+    monkeypatch.setattr(bot_main.translator, "detect_language", AsyncMock(return_value="fr"))
 
     asyncio.run(bot_main.on_message(message))
 
