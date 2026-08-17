@@ -77,6 +77,46 @@ def to_flores(iso_code: str) -> str | None:
     return ISO_TO_FLORES.get(iso_code.lower())
 
 
+# One representative country flag per supported language, used by the
+# "reactions" delivery mode (a flag reaction on a message triggers an on-demand
+# translation to that language). Catalan has no exact country flag in the
+# Unicode regional-indicator standard, so it's left out — still available
+# through every other delivery mode.
+ISO_TO_FLAG = {
+    "en": "🇬🇧",
+    "es": "🇪🇸",
+    "fr": "🇫🇷",
+    "de": "🇩🇪",
+    "pt": "🇵🇹",
+    "it": "🇮🇹",
+    "ja": "🇯🇵",
+    "ko": "🇰🇷",
+    "zh": "🇨🇳",
+    "ru": "🇷🇺",
+    "ar": "🇸🇦",
+    "hi": "🇮🇳",
+    "nl": "🇳🇱",
+    "pl": "🇵🇱",
+    "tr": "🇹🇷",
+    "vi": "🇻🇳",
+    "th": "🇹🇭",
+    "id": "🇮🇩",
+    "sv": "🇸🇪",
+    "el": "🇬🇷",
+    "he": "🇮🇱",
+    "uk": "🇺🇦",
+    "cs": "🇨🇿",
+    "ro": "🇷🇴",
+    "hu": "🇭🇺",
+    "fi": "🇫🇮",
+    "da": "🇩🇰",
+    "no": "🇳🇴",
+    "bn": "🇧🇩",
+}
+
+FLAG_TO_ISO = {flag: iso for iso, flag in ISO_TO_FLAG.items()}
+
+
 # Validated categorical palette (8 slots, fixed order, CVD-safe adjacent pairs),
 # dark-surface steps since Discord's embed panel reads dark in both client themes.
 LANGUAGE_COLORS = [

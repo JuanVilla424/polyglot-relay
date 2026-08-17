@@ -6,7 +6,14 @@ from discord.ext import tasks
 
 from app import storage, translator
 from app.config import DISCORD_BOT_TOKEN, LOG_CHANNEL_ID
-from app.lang_codes import ISO_TO_FLORES, ISO_TO_NAME, color_for, to_flores
+from app.lang_codes import (
+    FLAG_TO_ISO,
+    ISO_TO_FLAG,
+    ISO_TO_FLORES,
+    ISO_TO_NAME,
+    color_for,
+    to_flores,
+)
 from app.logger import logger
 
 intents = discord.Intents.default()
@@ -293,18 +300,21 @@ clearserverlanguage.error(_admin_command_error)
     name="setbehavior",
     description="Admin: choose how translations are delivered in this server",
 )
-@app_commands.describe(mode="Reply inline in the channel, open a thread, or DM each person")
+@app_commands.describe(
+    mode="Reply inline in the channel, open a thread, DM each person, or use flag reactions"
+)
 @app_commands.choices(
     mode=[
         app_commands.Choice(name="Reply in the channel (default)", value="reply"),
         app_commands.Choice(name="Open a thread", value="thread"),
         app_commands.Choice(name="DM each person privately", value="dm"),
+        app_commands.Choice(name="Flag reactions (translate on demand)", value="reactions"),
     ]
 )
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.checks.has_permissions(manage_guild=True)
 async def setbehavior(interaction: discord.Interaction, mode: app_commands.Choice[str]):
-    """Let an admin pick reply-in-channel, thread, or DM delivery for this guild."""
+    """Let an admin pick reply-in-channel, thread, DM, or flag-reactions delivery for this guild."""
     if interaction.guild_id is None:
         await interaction.response.send_message(
             "This command only works inside a server.", ephemeral=True
@@ -374,7 +384,7 @@ async def help_command(interaction: discord.Interaction):
         "`/clearrolelanguage <role>` — remove a role's language mapping",
         "`/setserverlanguage <code>` — set this server's fallback translation language",
         "`/clearserverlanguage` — reset the server's fallback language to the default",
-        "`/setbehavior <mode>` — choose reply-in-channel, thread, or DM delivery for this server",
+        "`/setbehavior <mode>` — choose reply-in-channel, thread, DM, or flag-reactions delivery",
         "`/clearbehavior` — reset translation delivery to the default (reply)",
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
@@ -524,6 +534,52 @@ async def _deliver_as_dm(
     return f"Sent {sent} DM(s), {failed} failed (DMs closed)."
 
 
+async def _deliver_as_reactions(message: discord.Message, target_languages: set[str]) -> str:
+    """Add one flag reaction per active language; translation happens on demand.
+
+    Nothing gets translated here — a flag only appears as a hint of which
+    languages are active. Languages without a known flag (e.g. Catalan) are
+    skipped rather than failing the whole batch.
+    """
+    added = 0
+    for target_lang in sorted(target_languages):
+        flag = ISO_TO_FLAG.get(target_lang)
+        if not flag:
+            continue
+        try:
+            await message.add_reaction(flag)
+            added += 1
+        except discord.HTTPException:
+            logger.warning("could not add reaction %s to message %s", flag, message.id)
+
+    if not added:
+        return "No flags to add (no known flag for the active languages)."
+    return f"Added {added} flag reaction(s)."
+
+
+async def _translate_single_language(message: discord.Message, target_lang: str) -> None:
+    """Translate one message into one language and reply with it publicly.
+
+    Used by the reactions delivery mode: called on demand when someone reacts
+    with a flag, instead of translating every active language upfront.
+    """
+    try:
+        translated, detected = await translator.translate(message.content, target_lang)
+    except Exception:
+        logger.exception("on-demand reaction translation failed for language %s", target_lang)
+        return
+
+    if detected == target_lang:
+        return
+
+    embeds = _make_language_embeds(target_lang, translated)
+    try:
+        for batch in _chunk_embeds(embeds):
+            await message.reply(embeds=batch, mention_author=False)
+    except discord.HTTPException:
+        logger.exception("failed to send reaction-triggered translation reply")
+
+
 _DELIVERY_MODES = {"reply": _deliver_as_reply, "thread": _deliver_as_thread}
 
 
@@ -559,6 +615,9 @@ async def _translate_and_deliver(message: discord.Message) -> str:
         sorted(target_languages),
     )
 
+    if mode == "reactions":
+        return await _deliver_as_reactions(message, target_languages)
+
     embeds_by_lang: dict[str, list[discord.Embed]] = {}
     for target_lang in sorted(target_languages):
         try:
@@ -589,6 +648,43 @@ async def on_message(message: discord.Message):
     if message.author.bot or message.guild is None or not message.content:
         return
     await _translate_and_deliver(message)
+
+
+@client.event
+async def on_raw_reaction_add(payload: discord.RawReactionActionEvent) -> None:
+    """In reactions mode, a flag reaction triggers an on-demand translation.
+
+    Uses the raw event (not on_reaction_add) so it also works on messages that
+    aren't in the client's message cache. Critically, this must ignore the
+    bot's own reactions — add_reaction() fires this same event, and without
+    this guard the bot would translate every message it just flagged.
+    """
+    if payload.user_id == client.user.id or payload.guild_id is None:
+        return
+
+    target_lang = FLAG_TO_ISO.get(str(payload.emoji))
+    if target_lang is None:
+        return
+
+    mode = storage.get_delivery_mode(payload.guild_id) or DEFAULT_DELIVERY_MODE
+    if mode != "reactions":
+        return
+
+    channel = client.get_channel(payload.channel_id)
+    if channel is None:
+        try:
+            channel = await client.fetch_channel(payload.channel_id)
+        except discord.HTTPException:
+            return
+    if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+        return
+
+    try:
+        message = await channel.fetch_message(payload.message_id)
+    except discord.HTTPException:
+        return
+
+    await _translate_single_language(message, target_lang)
 
 
 @tree.context_menu(name="Retry Translation")

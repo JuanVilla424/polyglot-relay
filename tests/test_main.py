@@ -51,7 +51,24 @@ def _make_message(author_id, content="hello", author_is_bot=False, channel=None)
     message.guild = message.channel.guild
     message.reply = AsyncMock()
     message.create_thread = AsyncMock()
+    message.add_reaction = AsyncMock()
     return message
+
+
+def _make_reaction_payload(user_id, guild_id, channel_id, message_id, emoji):
+    """A RawReactionActionEvent-shaped mock; emoji is a plain unicode flag string."""
+    payload = MagicMock()
+    payload.user_id = user_id
+    payload.guild_id = guild_id
+    payload.channel_id = channel_id
+    payload.message_id = message_id
+    payload.emoji = discord.PartialEmoji(name=emoji)
+    return payload
+
+
+def _set_bot_user_id(monkeypatch, user_id):
+    """discord.Client.user is a read-only property; patch it at the class level."""
+    monkeypatch.setattr(discord.Client, "user", property(lambda self: MagicMock(id=user_id)))
 
 
 def test_intents_enable_message_content():
@@ -771,3 +788,194 @@ def test_on_message_batches_embeds_past_the_ten_language_cap(tmp_path, monkeypat
     assert message.reply.await_count == 2
     total_embeds = sum(len(call.kwargs["embeds"]) for call in message.reply.call_args_list)
     assert total_embeds == len(codes)
+
+
+def test_setbehavior_stores_reactions_mode_for_guild(tmp_path, monkeypatch):
+    """An admin can choose flag-reactions delivery for the server."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.response.send_message = AsyncMock()
+    mode = discord.app_commands.Choice(
+        name="Flag reactions (translate on demand)", value="reactions"
+    )
+
+    asyncio.run(bot_main.setbehavior.callback(interaction, mode))
+
+    assert storage.get_delivery_mode(1) == "reactions"
+
+
+def test_deliver_as_reactions_adds_one_flag_per_language(monkeypatch):
+    """Each active language with a known flag gets its own reaction, nothing translated upfront."""
+    message = _make_message(100, content="hello")
+    translate_mock = AsyncMock()
+    monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
+
+    status = asyncio.run(bot_main._deliver_as_reactions(message, {"es", "fr"}))
+
+    assert message.add_reaction.await_count == 2
+    added_flags = {call.args[0] for call in message.add_reaction.call_args_list}
+    assert added_flags == {bot_main.ISO_TO_FLAG["es"], bot_main.ISO_TO_FLAG["fr"]}
+    assert status == "Added 2 flag reaction(s)."
+    translate_mock.assert_not_awaited()
+
+
+def test_deliver_as_reactions_skips_languages_without_a_known_flag():
+    """Catalan has no distinct flag in ISO_TO_FLAG; it's skipped, not an error."""
+    message = _make_message(100, content="hello")
+
+    status = asyncio.run(bot_main._deliver_as_reactions(message, {"ca"}))
+
+    message.add_reaction.assert_not_awaited()
+    assert status == "No flags to add (no known flag for the active languages)."
+
+
+def test_deliver_as_reactions_continues_after_one_reaction_fails():
+    """One flag failing to add (e.g. a permission hiccup) doesn't stop the rest."""
+    message = _make_message(100, content="hello")
+    response = MagicMock(status=403, reason="Forbidden")
+    message.add_reaction = AsyncMock(side_effect=[discord.Forbidden(response, "no perms"), None])
+
+    status = asyncio.run(bot_main._deliver_as_reactions(message, {"es", "fr"}))
+
+    assert message.add_reaction.await_count == 2
+    assert status == "Added 1 flag reaction(s)."
+
+
+def test_on_message_reactions_mode_adds_flags_without_translating_upfront(tmp_path, monkeypatch):
+    """/setbehavior reactions: flags appear immediately, nothing is translated until someone reacts."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 200, "es")
+    storage.set_delivery_mode(1, "reactions")
+    member = _make_member(1, 200)
+    channel = _make_channel(members=[member])
+    message = _make_message(100, content="hello", channel=channel)
+    message.guild.id = 1
+    translate_mock = AsyncMock()
+    monkeypatch.setattr(bot_main.translator, "translate", translate_mock)
+
+    asyncio.run(bot_main.on_message(message))
+
+    message.reply.assert_not_awaited()
+    message.create_thread.assert_not_awaited()
+    translate_mock.assert_not_awaited()
+    added_flags = {call.args[0] for call in message.add_reaction.call_args_list}
+    assert bot_main.ISO_TO_FLAG["es"] in added_flags
+    assert bot_main.ISO_TO_FLAG[bot_main.DEFAULT_SERVER_LANGUAGE] in added_flags
+
+
+def test_on_raw_reaction_add_ignores_the_bots_own_reaction(tmp_path, monkeypatch):
+    """The bot's own flag-adding must never trigger its own translation (explicit requirement)."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reactions")
+    _set_bot_user_id(monkeypatch, 999)
+    payload = _make_reaction_payload(
+        user_id=999, guild_id=1, channel_id=10, message_id=20, emoji="🇪🇸"
+    )
+    monkeypatch.setattr(
+        bot_main.client, "get_channel", MagicMock(side_effect=AssertionError("should not run"))
+    )
+
+    asyncio.run(bot_main.on_raw_reaction_add(payload))  # must not raise or look anything up
+
+
+def test_on_raw_reaction_add_ignores_reactions_outside_a_guild(monkeypatch):
+    """A flag reaction on a DM message (no guild) is ignored, not looked up."""
+    _set_bot_user_id(monkeypatch, 999)
+    payload = _make_reaction_payload(
+        user_id=100, guild_id=None, channel_id=10, message_id=20, emoji="🇪🇸"
+    )
+    monkeypatch.setattr(
+        bot_main.client, "get_channel", MagicMock(side_effect=AssertionError("should not run"))
+    )
+
+    asyncio.run(bot_main.on_raw_reaction_add(payload))  # must not raise
+
+
+def test_on_raw_reaction_add_ignores_unrecognized_emoji(tmp_path, monkeypatch):
+    """A reaction with an emoji that isn't a mapped flag is ignored."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reactions")
+    _set_bot_user_id(monkeypatch, 999)
+    payload = _make_reaction_payload(
+        user_id=100, guild_id=1, channel_id=10, message_id=20, emoji="👍"
+    )
+    monkeypatch.setattr(
+        bot_main.client, "get_channel", MagicMock(side_effect=AssertionError("should not run"))
+    )
+
+    asyncio.run(bot_main.on_raw_reaction_add(payload))  # must not raise
+
+
+def test_on_raw_reaction_add_ignores_when_guild_not_in_reactions_mode(tmp_path, monkeypatch):
+    """A flag reaction in a guild set to reply/thread/dm mode doesn't trigger anything."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reply")
+    _set_bot_user_id(monkeypatch, 999)
+    payload = _make_reaction_payload(
+        user_id=100, guild_id=1, channel_id=10, message_id=20, emoji="🇪🇸"
+    )
+    monkeypatch.setattr(
+        bot_main.client, "get_channel", MagicMock(side_effect=AssertionError("should not run"))
+    )
+
+    asyncio.run(bot_main.on_raw_reaction_add(payload))  # must not raise
+
+
+def test_on_raw_reaction_add_translates_and_replies_on_a_recognized_flag(tmp_path, monkeypatch):
+    """The full happy path: guild in reactions mode, a real flag -> on-demand public translation."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reactions")
+    _set_bot_user_id(monkeypatch, 999)
+    message = _make_message(100, content="hello")
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.fetch_message = AsyncMock(return_value=message)
+    monkeypatch.setattr(bot_main.client, "get_channel", MagicMock(return_value=channel))
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
+    payload = _make_reaction_payload(
+        user_id=100, guild_id=1, channel_id=10, message_id=20, emoji="🇪🇸"
+    )
+
+    asyncio.run(bot_main.on_raw_reaction_add(payload))
+
+    channel.fetch_message.assert_awaited_once_with(20)
+    message.reply.assert_awaited_once()
+    sent_embeds = message.reply.call_args.kwargs["embeds"]
+    assert sent_embeds[0].title.startswith("es")
+    assert sent_embeds[0].description == "hola"
+
+
+def test_on_raw_reaction_add_handles_a_deleted_message_gracefully(tmp_path, monkeypatch):
+    """If the reacted-on message was deleted before the fetch, this must not raise."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reactions")
+    _set_bot_user_id(monkeypatch, 999)
+    channel = MagicMock(spec=discord.TextChannel)
+    response = MagicMock(status=404, reason="Not Found")
+    channel.fetch_message = AsyncMock(side_effect=discord.NotFound(response, "Unknown Message"))
+    monkeypatch.setattr(bot_main.client, "get_channel", MagicMock(return_value=channel))
+    payload = _make_reaction_payload(
+        user_id=100, guild_id=1, channel_id=10, message_id=20, emoji="🇪🇸"
+    )
+
+    asyncio.run(bot_main.on_raw_reaction_add(payload))  # must not raise
+
+
+def test_on_raw_reaction_add_falls_back_to_fetch_channel_when_not_cached(tmp_path, monkeypatch):
+    """An uncached channel (e.g. an old thread) is fetched over the API instead of being skipped."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reactions")
+    _set_bot_user_id(monkeypatch, 999)
+    message = _make_message(100, content="hello")
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.fetch_message = AsyncMock(return_value=message)
+    monkeypatch.setattr(bot_main.client, "get_channel", MagicMock(return_value=None))
+    monkeypatch.setattr(bot_main.client, "fetch_channel", AsyncMock(return_value=channel))
+    monkeypatch.setattr(bot_main.translator, "translate", AsyncMock(return_value=("hola", "en")))
+    payload = _make_reaction_payload(
+        user_id=100, guild_id=1, channel_id=10, message_id=20, emoji="🇪🇸"
+    )
+
+    asyncio.run(bot_main.on_raw_reaction_add(payload))
+
+    message.reply.assert_awaited_once()
