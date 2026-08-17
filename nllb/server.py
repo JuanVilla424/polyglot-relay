@@ -11,6 +11,12 @@ from pydantic import BaseModel
 MODEL_NAME = "facebook/nllb-200-distilled-600M"
 MODEL_DIR = Path("/models/nllb-200-distilled-600M-int8")
 
+# Safety net for a single very long line: scale the output-token budget with the
+# input instead of relying on ctranslate2's fixed 256-token default.
+_MIN_DECODING_LENGTH = 256
+_DECODING_LENGTH_MULTIPLIER = 6
+_MAX_DECODING_LENGTH = 2048
+
 app = FastAPI()
 _lock = threading.Lock()
 _translator: ctranslate2.Translator | None = None
@@ -61,14 +67,40 @@ class TranslateResponse(BaseModel):
 
 @app.post("/translate", response_model=TranslateResponse)
 def translate(req: TranslateRequest) -> TranslateResponse:
-    """Translate q from the FLORES-200 source code to the target code."""
+    """Translate q from the FLORES-200 source code to the target code.
+
+    NLLB is a sentence-level model: a long multi-section message (headers, blank
+    lines, lists) makes it stop generating early, well before any decoding-length
+    cap. Translating line by line and rejoining keeps each call short enough for
+    the model to actually finish.
+    """
     translator = _get_translator()
     tokenizer = _get_tokenizer(req.source)
-    source_tokens = tokenizer.convert_ids_to_tokens(tokenizer.encode(req.q))
-    results = translator.translate_batch([source_tokens], target_prefix=[[req.target]])
-    target_tokens = results[0].hypotheses[0][1:]
-    text = tokenizer.decode(tokenizer.convert_tokens_to_ids(target_tokens))
-    return TranslateResponse(translatedText=text)
+
+    lines = req.q.split("\n")
+    translatable = [i for i, line in enumerate(lines) if line.strip()]
+    if not translatable:
+        return TranslateResponse(translatedText=req.q)
+
+    batch = [tokenizer.convert_ids_to_tokens(tokenizer.encode(lines[i])) for i in translatable]
+    max_decoding_length = min(
+        _MAX_DECODING_LENGTH,
+        max(
+            _MIN_DECODING_LENGTH, max(len(tokens) for tokens in batch) * _DECODING_LENGTH_MULTIPLIER
+        ),
+    )
+    results = translator.translate_batch(
+        batch,
+        target_prefix=[[req.target]] * len(batch),
+        max_decoding_length=max_decoding_length,
+    )
+
+    translated_lines = list(lines)
+    for index, result in zip(translatable, results):
+        target_tokens = result.hypotheses[0][1:]
+        translated_lines[index] = tokenizer.decode(tokenizer.convert_tokens_to_ids(target_tokens))
+
+    return TranslateResponse(translatedText="\n".join(translated_lines))
 
 
 @app.get("/health")
