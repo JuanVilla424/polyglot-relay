@@ -8,7 +8,7 @@ import pytest
 
 from app import storage as core_storage
 from app.modules.checks import ModuleDisabledError, module_enabled_predicate
-from app.modules.events import commands, handlers, logic, scheduler, storage
+from app.modules.events import commands, handlers, logic, scheduler, storage, views
 
 
 def _use_tmp_store(tmp_path, monkeypatch):
@@ -153,6 +153,17 @@ def test_make_event_embed_sets_image_when_present():
     embed = logic.make_event_embed(event)
 
     assert embed.image.url == "https://cdn.discordapp.com/attachments/x/y/z.png"
+
+
+def test_make_event_embed_omits_image_when_include_image_is_false():
+    """Real bug: RSVP re-renders that also set the image made Discord show it
+    twice (the original upload stays visible as the message's own attachment).
+    """
+    event = _make_event(image_url="https://cdn.discordapp.com/attachments/x/y/z.png")
+
+    embed = logic.make_event_embed(event, include_image=False)
+
+    assert embed.image.url is None
 
 
 # --- app.modules.checks.require_enabled ---------------------------------------------
@@ -326,6 +337,164 @@ def test_cancel_event_reports_when_message_is_not_a_tracked_event(tmp_path, monk
     assert "isn't a tracked event" in interaction.response.send_message.call_args.args[0]
 
 
+# --- logic.cancel_event_and_notify / _announce_cancellation --------------------------
+
+
+def test_cancel_event_and_notify_removes_the_event_and_replies(tmp_path, monkeypatch):
+    """The happy path: storage cleared, origin-channel notice posted, status returned."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.save_event(42, _make_event(title="Rally"))
+    message = MagicMock()
+    message.id = 42
+    message.reply = AsyncMock()
+    client = MagicMock()
+
+    status = asyncio.run(logic.cancel_event_and_notify(client, message, actor_id=555))
+
+    assert status == "Event cancelled."
+    assert storage.get_event(42) is None
+    message.reply.assert_awaited_once()
+
+
+def test_cancel_event_and_notify_reports_when_not_tracked(tmp_path, monkeypatch):
+    """A message that isn't a tracked event is reported clearly, nothing touched."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    message = MagicMock()
+    message.id = 999
+    message.reply = AsyncMock()
+    client = MagicMock()
+
+    status = asyncio.run(logic.cancel_event_and_notify(client, message, actor_id=555))
+
+    assert "isn't a tracked event" in status
+    message.reply.assert_not_awaited()
+
+
+def test_cancel_event_and_notify_reports_to_the_configured_log_channel(tmp_path, monkeypatch):
+    """Real gap: cancelling an event never reached LOG_CHANNEL_ID, unlike every
+    other admin action in this bot (/polyglot-modules, /setlanguage, etc.).
+    """
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.save_event(42, _make_event(title="Rally"))
+    monkeypatch.setattr(logic, "report_to_log_channel", AsyncMock())
+    message = MagicMock()
+    message.id = 42
+    message.reply = AsyncMock()
+    client = MagicMock()
+
+    asyncio.run(logic.cancel_event_and_notify(client, message, actor_id=555))
+
+    logic.report_to_log_channel.assert_awaited_once()
+    sent_text = logic.report_to_log_channel.call_args.args[1]
+    assert "555" in sent_text
+    assert "Rally" in sent_text
+
+
+def test_announce_cancellation_noop_when_unconfigured(monkeypatch):
+    """No ANNOUNCEMENTS_CHANNEL_ID set -> the client is never touched."""
+    monkeypatch.setattr(logic, "ANNOUNCEMENTS_CHANNEL_ID", None)
+    client = MagicMock(get_channel=MagicMock(side_effect=AssertionError("should not run")))
+
+    asyncio.run(logic._announce_cancellation(client, _make_event(title="Rally")))
+
+
+def test_announce_cancellation_pings_everyone_in_the_configured_channel(monkeypatch):
+    """A configured channel gets an @everyone ping naming the cancelled event."""
+    monkeypatch.setattr(logic, "ANNOUNCEMENTS_CHANNEL_ID", 999)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.send = AsyncMock()
+    client = MagicMock(get_channel=MagicMock(return_value=channel))
+
+    asyncio.run(logic._announce_cancellation(client, _make_event(title="Rally")))
+
+    channel.send.assert_awaited_once()
+    sent_text = channel.send.call_args.args[0]
+    assert "@everyone" in sent_text
+    assert "Rally" in sent_text
+    assert channel.send.call_args.kwargs["allowed_mentions"].everyone is True
+
+
+def test_announce_cancellation_swallows_send_failures(monkeypatch):
+    """A permission error posting the announcement never propagates to the caller."""
+    monkeypatch.setattr(logic, "ANNOUNCEMENTS_CHANNEL_ID", 999)
+    channel = MagicMock(spec=discord.TextChannel)
+    response = MagicMock(status=403, reason="Forbidden")
+    channel.send = AsyncMock(side_effect=discord.Forbidden(response, "missing permissions"))
+    client = MagicMock(get_channel=MagicMock(return_value=channel))
+
+    asyncio.run(logic._announce_cancellation(client, _make_event(title="Rally")))  # must not raise
+
+
+# --- views.EventView (the on-message Cancel Event button) ----------------------------
+
+
+def _make_button_interaction(guild_id, user_id, message, manage_guild):
+    interaction = MagicMock()
+    interaction.guild_id = guild_id
+    interaction.user.id = user_id
+    interaction.user.guild_permissions.manage_guild = manage_guild
+    interaction.message = message
+    interaction.client = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    return interaction
+
+
+def test_event_view_cancel_blocks_when_module_disabled(tmp_path, monkeypatch):
+    """events isn't enabled for this guild -> ephemeral notice, nothing cancelled."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.save_event(42, _make_event(guild_id=1))
+    message = MagicMock()
+    message.id = 42
+    interaction = _make_button_interaction(
+        guild_id=1, user_id=555, message=message, manage_guild=True
+    )
+    view = views.EventView()
+
+    asyncio.run(view.cancel.callback(interaction))
+
+    interaction.response.send_message.assert_awaited_once()
+    assert "isn't enabled" in interaction.response.send_message.call_args.args[0]
+    assert storage.get_event(42) is not None
+
+
+def test_event_view_cancel_blocks_without_manage_guild_permission(tmp_path, monkeypatch):
+    """Any member can see the button, but only Manage Server can actually use it."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    core_storage.set_module_enabled(1, "events", True)
+    storage.save_event(42, _make_event(guild_id=1))
+    message = MagicMock()
+    message.id = 42
+    interaction = _make_button_interaction(
+        guild_id=1, user_id=555, message=message, manage_guild=False
+    )
+    view = views.EventView()
+
+    asyncio.run(view.cancel.callback(interaction))
+
+    interaction.response.send_message.assert_awaited_once()
+    assert "Manage Server" in interaction.response.send_message.call_args.args[0]
+    assert storage.get_event(42) is not None
+
+
+def test_event_view_cancel_removes_the_event_when_authorized(tmp_path, monkeypatch):
+    """An admin, with the module enabled, successfully cancels via the button."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    core_storage.set_module_enabled(1, "events", True)
+    storage.save_event(42, _make_event(guild_id=1))
+    message = MagicMock()
+    message.id = 42
+    message.reply = AsyncMock()
+    interaction = _make_button_interaction(
+        guild_id=1, user_id=555, message=message, manage_guild=True
+    )
+    view = views.EventView()
+
+    asyncio.run(view.cancel.callback(interaction))
+
+    assert storage.get_event(42) is None
+    interaction.response.send_message.assert_awaited_once_with("Event cancelled.", ephemeral=True)
+
+
 # --- handlers.handle_reaction_add / handle_reaction_remove ---------------------------
 
 
@@ -365,6 +534,30 @@ def test_handle_reaction_add_records_the_rsvp_and_refreshes_the_embed(tmp_path, 
     assert claimed is True
     assert storage.get_event(42)["rsvps"]["100"] == "going"
     message.edit.assert_awaited_once()
+
+
+def test_handle_reaction_add_refreshes_the_embed_without_duplicating_the_image(
+    tmp_path, monkeypatch
+):
+    """Real bug: an event with an image showed it twice after the first RSVP --
+    the rebuilt embed re-set the image while the original attachment was still
+    on the message. The refreshed embed must not carry the image field.
+    """
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.save_event(
+        42, _make_event(image_url="https://cdn.discordapp.com/attachments/x/y/z.png")
+    )
+    message = MagicMock()
+    message.edit = AsyncMock()
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.fetch_message = AsyncMock(return_value=message)
+    client = MagicMock(get_channel=MagicMock(return_value=channel))
+    payload = _make_reaction_payload(100, 1, 10, 42, "✅")
+
+    asyncio.run(handlers.handle_reaction_add(client, payload))
+
+    edited_embed = message.edit.call_args.kwargs["embed"]
+    assert edited_embed.image.url is None
 
 
 def test_handle_reaction_remove_clears_the_rsvp(tmp_path, monkeypatch):

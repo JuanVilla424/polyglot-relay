@@ -7,10 +7,12 @@ from app.modules.events import storage
 from app.modules.events.logic import (
     REMINDER_OFFSETS_MINUTES,
     RSVP_EMOJIS,
+    cancel_event_and_notify,
     make_event_embed,
     parse_event_timestamp,
     pending_reminder_offsets,
 )
+from app.modules.events.views import EventView
 
 
 async def _admin_command_error(
@@ -90,7 +92,9 @@ async def createvent(  # pylint: disable=too-many-arguments,too-many-positional-
         files.append(file)
         event["image_url"] = f"attachment://{file.filename}"
 
-    await interaction.response.send_message(embed=make_event_embed(event), files=files)
+    await interaction.response.send_message(
+        embed=make_event_embed(event), files=files, view=EventView()
+    )
     sent = await interaction.original_response()
 
     if image is not None and sent.embeds and sent.embeds[0].image:
@@ -158,20 +162,8 @@ listevents.error(_admin_command_error)
 @app_commands.checks.has_permissions(manage_guild=True)
 async def cancel_event(interaction: discord.Interaction, message: discord.Message):
     """Admin: stop tracking an event (no more reminders) and mark its post cancelled."""
-    event = storage.get_event(message.id)
-    if event is None:
-        await interaction.response.send_message(
-            "That message isn't a tracked event.", ephemeral=True
-        )
-        return
-
-    storage.delete_event(message.id)
-    try:
-        await message.reply("🚫 This event was cancelled.", mention_author=False)
-    except discord.HTTPException:
-        logger.warning("could not post the cancellation notice for event %s", message.id)
-    logger.info("event %s cancelled by %s", message.id, interaction.user.id)
-    await interaction.response.send_message("Event cancelled.", ephemeral=True)
+    status = await cancel_event_and_notify(interaction.client, message, interaction.user.id)
+    await interaction.response.send_message(status, ephemeral=True)
 
 
 cancel_event.error(_admin_command_error)

@@ -3,6 +3,11 @@ from datetime import datetime, timedelta, timezone
 
 import discord
 
+from app.config import ANNOUNCEMENTS_CHANNEL_ID
+from app.discord_utils import report_to_log_channel, resolve_text_channel
+from app.logger import logger
+from app.modules.events import storage
+
 RSVP_EMOJIS = {"✅": "going", "❓": "maybe", "❌": "not_going"}
 RSVP_LABELS = {"going": "✅ Going", "maybe": "❓ Maybe", "not_going": "❌ Not going"}
 
@@ -55,8 +60,13 @@ def pending_reminder_offsets(created_at: int, event_timestamp: int) -> list[int]
     ]
 
 
-def make_event_embed(event: dict) -> discord.Embed:
-    """Build the event embed: title, description, time, image, and RSVP counts."""
+def make_event_embed(event: dict, include_image: bool = True) -> discord.Embed:
+    """Build the event embed: title, description, time, image, and RSVP counts.
+
+    include_image=False skips the image field on re-renders (RSVP updates):
+    the original upload stays visible as the message's own attachment, and
+    setting the same image on the embed too made Discord display it twice.
+    """
     embed = discord.Embed(
         title=event["title"], description=event.get("description") or None, color=EVENT_COLOR
     )
@@ -66,6 +76,49 @@ def make_event_embed(event: dict) -> discord.Embed:
         user_ids = [user_id for user_id, s in event["rsvps"].items() if s == status]
         mentions = " ".join(f"<@{user_id}>" for user_id in user_ids) or "—"
         embed.add_field(name=f"{label} ({len(user_ids)})", value=mentions, inline=True)
-    if event.get("image_url"):
+    if include_image and event.get("image_url"):
         embed.set_image(url=event["image_url"])
     return embed
+
+
+async def cancel_event_and_notify(
+    client: discord.Client, message: discord.Message, actor_id: int
+) -> str:
+    """Stop tracking an event, notify its origin channel, and announce it if configured.
+
+    Shared by the "Cancel Event" context-menu command and the on-message
+    button so both stay in sync instead of duplicating this logic.
+    """
+    event = storage.get_event(message.id)
+    if event is None:
+        return "That message isn't a tracked event."
+
+    storage.delete_event(message.id)
+    try:
+        await message.reply("🚫 This event was cancelled.", mention_author=False)
+    except discord.HTTPException:
+        logger.warning("could not post the cancellation notice for event %s", message.id)
+
+    await _announce_cancellation(client, event)
+    await report_to_log_channel(
+        client, f"🚫 <@{actor_id}> cancelled the event **{event['title']}**"
+    )
+
+    logger.info("event %s cancelled by %s", message.id, actor_id)
+    return "Event cancelled."
+
+
+async def _announce_cancellation(client: discord.Client, event: dict) -> None:
+    """Best-effort @everyone ping in the announcements channel, if one is configured."""
+    if ANNOUNCEMENTS_CHANNEL_ID is None:
+        return
+    channel = await resolve_text_channel(client, ANNOUNCEMENTS_CHANNEL_ID)
+    if channel is None:
+        return
+    try:
+        await channel.send(
+            f"@everyone 🚫 **{event['title']}** was cancelled.",
+            allowed_mentions=discord.AllowedMentions(everyone=True),
+        )
+    except discord.HTTPException:
+        logger.warning("could not post the cancellation announcement for %r", event["title"])

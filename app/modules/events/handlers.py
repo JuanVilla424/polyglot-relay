@@ -31,7 +31,7 @@ async def _update_rsvp(
         return True
     try:
         message = await channel.fetch_message(payload.message_id)
-        await message.edit(embed=make_event_embed(event))
+        await message.edit(embed=make_event_embed(event, include_image=False))
     except discord.HTTPException:
         logger.warning("could not refresh the RSVP embed for event %s", payload.message_id)
     return True

@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY pyproject.toml CHANGELOG.md ./
+COPY pyproject.toml CHANGELOG.md deploy_commit_log.txt deploy_sha.txt ./
 
 RUN pip install --no-cache-dir poetry==2.4.1 \
     && poetry config virtualenvs.create false \

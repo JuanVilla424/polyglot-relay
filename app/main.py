@@ -9,6 +9,7 @@ from app.config import DISCORD_BOT_TOKEN
 from app.logger import logger
 from app.modules import MODULES
 from app.modules.events.scheduler import reminder_loop
+from app.modules.events.views import EventView
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -31,36 +32,44 @@ def _active_modules(guild_id: int) -> list:
     return [module for name, module in MODULES.items() if storage.is_module_enabled(guild_id, name)]
 
 
-async def _announce_deploy_if_new_version() -> None:
-    """Post the changelog to the log channel once per actual new version.
+async def _announce_deploy_if_new_sha() -> None:
+    """Post the commit log to the log channel once per actual new deploy.
 
-    Not on every gateway reconnect, and never for the version already running
+    Keyed on the git SHA baked in by deploy.sh, not on pyproject.toml's
+    version -- a deploy doesn't require a version bump (most don't), so the
+    version was the wrong signal for "did something actually get deployed".
+    Not on every gateway reconnect, and never for the SHA already running
     the first time this ships -- that first run just seeds the baseline.
     """
-    current = version_notice.get_current_version()
-    if current is None:
+    current_sha = version_notice.get_deploy_sha()
+    if current_sha is None:
         return
-    last_announced = storage.get_last_announced_version()
+    last_announced = storage.get_last_announced_sha()
     if last_announced is None:
-        storage.set_last_announced_version(current)
+        storage.set_last_announced_sha(current_sha)
         return
-    if current == last_announced:
+    if current_sha == last_announced:
         return
-    changelog_entry = version_notice.get_latest_changelog_entry()
-    for message in version_notice.build_deploy_announcement(current, changelog_entry):
+    commit_log = version_notice.get_deploy_commit_log()
+    new_commits = version_notice.commits_since(last_announced, commit_log)
+    pyproject_version = version_notice.get_current_version()
+    for message in version_notice.build_deploy_announcement(
+        current_sha, pyproject_version, new_commits
+    ):
         await discord_utils.report_to_log_channel(client, message)
-    storage.set_last_announced_version(current)
+    storage.set_last_announced_sha(current_sha)
 
 
 @client.event
 async def on_ready():
     """Sync application commands, and start the background loops, once logged in."""
     await tree.sync()
+    client.add_view(EventView())
     if not _heartbeat.is_running():
         _heartbeat.start()
     if not reminder_loop.is_running():
         reminder_loop.start(client)
-    await _announce_deploy_if_new_version()
+    await _announce_deploy_if_new_sha()
     logger.info("logged in as %s", client.user)
 
 

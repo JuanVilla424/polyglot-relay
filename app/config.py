@@ -18,6 +18,9 @@ NLLB_URL = os.getenv("NLLB_URL", "http://nllb:8000")
 _log_channel_id = os.getenv("LOG_CHANNEL_ID")
 LOG_CHANNEL_ID = int(_log_channel_id) if _log_channel_id else None
 
+_announcements_channel_id = os.getenv("ANNOUNCEMENTS_CHANNEL_ID")
+ANNOUNCEMENTS_CHANNEL_ID = int(_announcements_channel_id) if _announcements_channel_id else None
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 USER_LANGUAGES_PATH = DATA_DIR / "user_languages.json"
 ROLE_LANGUAGES_PATH = DATA_DIR / "role_languages.json"
@@ -25,5 +28,5 @@ SERVER_LANGUAGE_PATH = DATA_DIR / "server_language.json"
 DELIVERY_MODE_PATH = DATA_DIR / "delivery_mode.json"
 EXCLUDED_CHANNELS_PATH = DATA_DIR / "excluded_channels.json"
 ENABLED_MODULES_PATH = DATA_DIR / "enabled_modules.json"
-LAST_ANNOUNCED_VERSION_PATH = DATA_DIR / "last_announced_version.json"
+LAST_ANNOUNCED_SHA_PATH = DATA_DIR / "last_announced_sha.json"
 EVENTS_PATH = DATA_DIR / "events.json"
