@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from app.config import DATA_DIR, ENABLED_MODULES_PATH
+from app.config import DATA_DIR, ENABLED_MODULES_PATH, LAST_ANNOUNCED_VERSION_PATH
 
 # Modules a guild gets without ever running /polyglot-modules. New modules
 # (e.g. events) start opted-out until an admin explicitly enables them --
@@ -62,3 +62,13 @@ def set_module_enabled(guild_id: int, module_name: str, enabled: bool) -> None:
     data = read_json(ENABLED_MODULES_PATH)
     data[f"{guild_id}:{module_name}"] = enabled
     write_json(ENABLED_MODULES_PATH, data)
+
+
+def get_last_announced_version() -> str | None:
+    """Return the version this bot last posted a deploy announcement for, if any."""
+    return read_json(LAST_ANNOUNCED_VERSION_PATH).get("version")
+
+
+def set_last_announced_version(version: str) -> None:
+    """Persist the version just announced, so a plain restart doesn't re-post it."""
+    write_json(LAST_ANNOUNCED_VERSION_PATH, {"version": version})

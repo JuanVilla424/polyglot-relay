@@ -1,6 +1,7 @@
 from app import storage
 from app.config import (
     DELIVERY_MODE_PATH,
+    EXCLUDED_CHANNELS_PATH,
     ROLE_LANGUAGES_PATH,
     SERVER_LANGUAGE_PATH,
     USER_LANGUAGES_PATH,
@@ -83,3 +84,21 @@ def set_delivery_mode(guild_id: int, mode: str) -> None:
 def clear_delivery_mode(guild_id: int) -> None:
     """Remove the guild's delivery mode override, if any was set."""
     storage.clear_key(DELIVERY_MODE_PATH, str(guild_id))
+
+
+def is_channel_excluded(guild_id: int, channel_id: int) -> bool:
+    """Whether this channel is opted out of translation (e.g. a role-picker channel)."""
+    return storage.read_json(EXCLUDED_CHANNELS_PATH).get(
+        storage.make_key(guild_id, channel_id), False
+    )
+
+
+def set_channel_excluded(guild_id: int, channel_id: int, excluded: bool) -> None:
+    """Persist whether this channel is opted out of translation; False clears the entry."""
+    key = storage.make_key(guild_id, channel_id)
+    if excluded:
+        data = storage.read_json(EXCLUDED_CHANNELS_PATH)
+        data[key] = True
+        storage.write_json(EXCLUDED_CHANNELS_PATH, data)
+    else:
+        storage.clear_key(EXCLUDED_CHANNELS_PATH, key)

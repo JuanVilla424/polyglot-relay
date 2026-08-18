@@ -16,6 +16,7 @@ def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "ROLE_LANGUAGES_PATH", tmp_path / "role_languages.json")
     monkeypatch.setattr(storage, "SERVER_LANGUAGE_PATH", tmp_path / "server_language.json")
     monkeypatch.setattr(storage, "DELIVERY_MODE_PATH", tmp_path / "delivery_mode.json")
+    monkeypatch.setattr(storage, "EXCLUDED_CHANNELS_PATH", tmp_path / "excluded_channels.json")
 
 
 def _make_member(guild_id, user_id, role_ids=()):
@@ -83,6 +84,7 @@ def test_commands_module_registers_every_translation_command():
     assert "clearserverlanguage" in names
     assert "setbehavior" in names
     assert "clearbehavior" in names
+    assert "channeltranslation" in names
     assert "languages" in names
     assert "Translate Message" in names
     assert "Retry Translation" in names
@@ -192,6 +194,52 @@ def test_setbehavior_stores_reactions_mode_for_guild(tmp_path, monkeypatch):
     asyncio.run(commands.setbehavior.callback(interaction, mode))
 
     assert storage.get_delivery_mode(1) == "reactions"
+
+
+def test_channeltranslation_disable_stores_exclusion_for_target_channel(tmp_path, monkeypatch):
+    """An admin can opt a specific channel out of translation."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.response.send_message = AsyncMock()
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 10
+    action = discord.app_commands.Choice(name="Disable", value="disable")
+
+    asyncio.run(commands.channeltranslation.callback(interaction, action, channel))
+
+    assert storage.is_channel_excluded(1, 10) is True
+
+
+def test_channeltranslation_enable_clears_exclusion_for_target_channel(tmp_path, monkeypatch):
+    """Re-enabling removes a previously stored exclusion."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_channel_excluded(1, 10, True)
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.response.send_message = AsyncMock()
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = 10
+    action = discord.app_commands.Choice(name="Enable", value="enable")
+
+    asyncio.run(commands.channeltranslation.callback(interaction, action, channel))
+
+    assert storage.is_channel_excluded(1, 10) is False
+
+
+def test_channeltranslation_defaults_to_the_invoking_channel(tmp_path, monkeypatch):
+    """No channel argument -> targets wherever the command was run."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.response.send_message = AsyncMock()
+    interaction.channel = MagicMock(spec=discord.TextChannel)
+    interaction.channel.id = 99
+    action = discord.app_commands.Choice(name="Disable", value="disable")
+
+    asyncio.run(commands.channeltranslation.callback(interaction, action, None))
+
+    assert storage.is_channel_excluded(1, 99) is True
 
 
 def test_admin_command_error_reports_missing_permissions():
@@ -387,6 +435,33 @@ def test_on_message_ignores_when_no_content(tmp_path, monkeypatch):
     asyncio.run(handlers.handle_message(None, message))
 
     translate_mock.assert_not_awaited()
+
+
+def test_on_message_skips_excluded_channel(tmp_path, monkeypatch):
+    """A channel opted out via /channeltranslation is invisible to the translation module.
+
+    Real bug: a role-picker channel where people react with country flags to
+    self-assign a role was getting those reactions "translated" -- Discord
+    permissions can't fix this (they gate whether the bot can see/react in a
+    channel at all, not this module's own trigger logic), so it needs an
+    explicit exclusion instead.
+    """
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_user_language(1, 200, "es")
+    member = _make_member(1, 200)
+    channel = _make_channel(members=[member])
+    channel.id = 10
+    message = _make_message(100, content="hello", channel=channel)
+    message.guild.id = 1
+    storage.set_channel_excluded(1, 10, True)
+    translate_mock = AsyncMock()
+    monkeypatch.setattr(logic.translator, "translate", translate_mock)
+
+    asyncio.run(handlers.handle_message(None, message))
+
+    translate_mock.assert_not_awaited()
+    message.reply.assert_not_awaited()
+    message.add_reaction.assert_not_awaited()
 
 
 def test_on_message_replies_with_combined_translations(tmp_path, monkeypatch):
@@ -910,6 +985,21 @@ def test_handle_reaction_add_ignores_when_guild_not_in_reactions_mode(tmp_path, 
     """A flag reaction in a guild set to reply/thread/dm mode doesn't trigger anything."""
     _use_tmp_store(tmp_path, monkeypatch)
     storage.set_delivery_mode(1, "reply")
+    client = MagicMock(get_channel=MagicMock(side_effect=AssertionError("should not run")))
+    payload = _make_reaction_payload(
+        user_id=100, guild_id=1, channel_id=10, message_id=20, emoji="🇪🇸"
+    )
+
+    claimed = asyncio.run(handlers.handle_reaction_add(client, payload))
+
+    assert claimed is False
+
+
+def test_handle_reaction_add_skips_excluded_channel(tmp_path, monkeypatch):
+    """A flag reaction in an excluded channel (e.g. a role-picker) is left alone."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reactions")
+    storage.set_channel_excluded(1, 10, True)
     client = MagicMock(get_channel=MagicMock(side_effect=AssertionError("should not run")))
     payload = _make_reaction_payload(
         user_id=100, guild_id=1, channel_id=10, message_id=20, emoji="🇪🇸"

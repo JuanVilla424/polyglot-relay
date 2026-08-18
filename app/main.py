@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from app import discord_utils, storage
+from app import discord_utils, storage, version_notice
 from app.config import DISCORD_BOT_TOKEN
 from app.logger import logger
 from app.modules import MODULES
@@ -31,6 +31,27 @@ def _active_modules(guild_id: int) -> list:
     return [module for name, module in MODULES.items() if storage.is_module_enabled(guild_id, name)]
 
 
+async def _announce_deploy_if_new_version() -> None:
+    """Post the changelog to the log channel once per actual new version.
+
+    Not on every gateway reconnect, and never for the version already running
+    the first time this ships -- that first run just seeds the baseline.
+    """
+    current = version_notice.get_current_version()
+    if current is None:
+        return
+    last_announced = storage.get_last_announced_version()
+    if last_announced is None:
+        storage.set_last_announced_version(current)
+        return
+    if current == last_announced:
+        return
+    changelog_entry = version_notice.get_latest_changelog_entry()
+    for message in version_notice.build_deploy_announcement(current, changelog_entry):
+        await discord_utils.report_to_log_channel(client, message)
+    storage.set_last_announced_version(current)
+
+
 @client.event
 async def on_ready():
     """Sync application commands, and start the background loops, once logged in."""
@@ -39,6 +60,7 @@ async def on_ready():
         _heartbeat.start()
     if not reminder_loop.is_running():
         reminder_loop.start(client)
+    await _announce_deploy_if_new_version()
     logger.info("logged in as %s", client.user)
 
 
@@ -155,6 +177,8 @@ async def help_command(interaction: discord.Interaction):
         "`/clearserverlanguage` — reset the server's fallback language to the default",
         "`/setbehavior <mode>` — choose reply-in-channel, thread, DM, or flag-reactions delivery",
         "`/clearbehavior` — reset translation delivery to the default (reply)",
+        "`/channeltranslation <enable|disable> [channel]` — opt a channel out of translation "
+        "(e.g. a flag-reaction role-picker)",
         "",
         "**Events** (module, disabled by default — `/polyglot-modules enable events`)",
         "`/createvent <title> <date> <time> <utc_offset> [description] [image]` — admin: create an event",

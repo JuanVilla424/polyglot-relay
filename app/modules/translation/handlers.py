@@ -15,6 +15,8 @@ async def handle_message(_client: discord.Client, message: discord.Message) -> N
     """Deliver the message translated into every language active here."""
     if not message.content:
         return
+    if storage.is_channel_excluded(message.guild.id, message.channel.id):
+        return
     await _translate_and_deliver(message)
 
 
@@ -32,6 +34,9 @@ async def handle_reaction_add(
 
     mode = storage.get_delivery_mode(payload.guild_id) or DEFAULT_DELIVERY_MODE
     if mode != "reactions":
+        return False
+
+    if storage.is_channel_excluded(payload.guild_id, payload.channel_id):
         return False
 
     channel = await resolve_text_channel(client, payload.channel_id)

@@ -8,6 +8,7 @@ def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "ROLE_LANGUAGES_PATH", tmp_path / "role_languages.json")
     monkeypatch.setattr(storage, "SERVER_LANGUAGE_PATH", tmp_path / "server_language.json")
     monkeypatch.setattr(storage, "DELIVERY_MODE_PATH", tmp_path / "delivery_mode.json")
+    monkeypatch.setattr(storage, "EXCLUDED_CHANNELS_PATH", tmp_path / "excluded_channels.json")
 
 
 def test_get_user_language_missing_file_returns_none(tmp_path, monkeypatch):
@@ -87,6 +88,45 @@ def test_clear_role_language_removes_only_that_entry(tmp_path, monkeypatch):
 
     assert storage.get_role_language(1, 10) is None
     assert storage.get_role_language(1, 20) == "en"
+
+
+def test_is_channel_excluded_missing_file_returns_false(tmp_path, monkeypatch):
+    """No store file on disk yet -> a channel is included (not excluded) by default."""
+    _use_tmp_store(tmp_path, monkeypatch)
+
+    assert storage.is_channel_excluded(1, 10) is False
+
+
+def test_set_and_get_channel_excluded_round_trip_and_isolates_by_guild(tmp_path, monkeypatch):
+    """An exclusion persists and stays scoped to its guild/channel."""
+    _use_tmp_store(tmp_path, monkeypatch)
+
+    storage.set_channel_excluded(1, 10, True)
+
+    assert storage.is_channel_excluded(1, 10) is True
+    assert storage.is_channel_excluded(1, 999) is False
+    assert storage.is_channel_excluded(2, 10) is False
+
+
+def test_set_channel_excluded_false_removes_the_entry(tmp_path, monkeypatch):
+    """Re-enabling a channel clears its exclusion, leaving other channels untouched."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_channel_excluded(1, 10, True)
+    storage.set_channel_excluded(1, 20, True)
+
+    storage.set_channel_excluded(1, 10, False)
+
+    assert storage.is_channel_excluded(1, 10) is False
+    assert storage.is_channel_excluded(1, 20) is True
+
+
+def test_set_channel_excluded_false_is_a_noop_when_unset(tmp_path, monkeypatch):
+    """Re-enabling a channel that was never excluded doesn't raise."""
+    _use_tmp_store(tmp_path, monkeypatch)
+
+    storage.set_channel_excluded(1, 10, False)  # must not raise
+
+    assert storage.is_channel_excluded(1, 10) is False
 
 
 def test_get_server_language_missing_returns_none(tmp_path, monkeypatch):

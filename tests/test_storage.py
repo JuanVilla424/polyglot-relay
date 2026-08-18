@@ -4,6 +4,9 @@ from app import storage
 def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
     monkeypatch.setattr(storage, "ENABLED_MODULES_PATH", tmp_path / "enabled_modules.json")
+    monkeypatch.setattr(
+        storage, "LAST_ANNOUNCED_VERSION_PATH", tmp_path / "last_announced_version.json"
+    )
 
 
 def test_read_json_missing_file_returns_empty_dict(tmp_path):
@@ -82,3 +85,29 @@ def test_module_enabled_state_isolates_by_guild(tmp_path, monkeypatch):
 
     assert storage.is_module_enabled(1, "events") is True
     assert storage.is_module_enabled(2, "events") is False
+
+
+def test_get_last_announced_version_missing_returns_none(tmp_path, monkeypatch):
+    """No version ever announced yet -> None, not a crash."""
+    _use_tmp_store(tmp_path, monkeypatch)
+
+    assert storage.get_last_announced_version() is None
+
+
+def test_set_and_get_last_announced_version_round_trips(tmp_path, monkeypatch):
+    """A stored version persists and reads back exactly."""
+    _use_tmp_store(tmp_path, monkeypatch)
+
+    storage.set_last_announced_version("1.0.5")
+
+    assert storage.get_last_announced_version() == "1.0.5"
+
+
+def test_set_last_announced_version_overwrites_the_previous_value(tmp_path, monkeypatch):
+    """A new version bump replaces the old baseline, not appends to it."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_last_announced_version("1.0.4")
+
+    storage.set_last_announced_version("1.0.5")
+
+    assert storage.get_last_announced_version() == "1.0.5"

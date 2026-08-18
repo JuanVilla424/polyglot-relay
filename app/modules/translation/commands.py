@@ -305,6 +305,52 @@ async def clearbehavior(interaction: discord.Interaction):
 clearbehavior.error(_admin_command_error)
 
 
+@app_commands.command(
+    name="channeltranslation",
+    description="Admin: turn translation on or off for a specific channel",
+)
+@app_commands.describe(
+    action="Enable or disable",
+    channel="Which channel (defaults to the one you're in)",
+)
+@app_commands.choices(
+    action=[
+        app_commands.Choice(name="Enable", value="enable"),
+        app_commands.Choice(name="Disable", value="disable"),
+    ]
+)
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def channeltranslation(
+    interaction: discord.Interaction,
+    action: app_commands.Choice[str],
+    channel: discord.TextChannel | None = None,
+):
+    """Let an admin opt a channel out of translation, e.g. a flag-reaction role-picker."""
+    target = channel or interaction.channel
+    if interaction.guild_id is None or not isinstance(
+        target, (discord.TextChannel, discord.Thread)
+    ):
+        await interaction.response.send_message(
+            "This only works on a text channel inside a server.", ephemeral=True
+        )
+        return
+    excluded = action.value == "disable"
+    storage.set_channel_excluded(interaction.guild_id, target.id, excluded)
+    await interaction.response.send_message(
+        f"Translation {'disabled' if excluded else 'enabled'} for {target.mention}.",
+        ephemeral=True,
+    )
+    await _report_language_change(
+        interaction.client,
+        f"🌐 {interaction.user.mention} {'disabled' if excluded else 'enabled'} "
+        f"translation in {target.mention}",
+    )
+
+
+channeltranslation.error(_admin_command_error)
+
+
 @app_commands.command(name="languages", description="List the language codes this bot supports")
 async def languages(interaction: discord.Interaction):
     """Show every ISO 639-1 code mapped in lang_codes.py, with its language name."""
@@ -376,6 +422,7 @@ def register(tree: app_commands.CommandTree) -> None:
         clearserverlanguage,
         setbehavior,
         clearbehavior,
+        channeltranslation,
         languages,
         translate_message,
         retry_translation,

@@ -13,6 +13,9 @@ from app import storage
 def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
     monkeypatch.setattr(storage, "ENABLED_MODULES_PATH", tmp_path / "enabled_modules.json")
+    monkeypatch.setattr(
+        storage, "LAST_ANNOUNCED_VERSION_PATH", tmp_path / "last_announced_version.json"
+    )
 
 
 def _set_bot_user_id(monkeypatch, user_id):
@@ -350,6 +353,54 @@ def test_polyglot_modules_error_reports_missing_permissions():
 
     interaction.response.send_message.assert_awaited_once()
     assert "Manage Server" in interaction.response.send_message.call_args.args[0]
+
+
+def test_announce_deploy_seeds_baseline_silently_on_first_run(tmp_path, monkeypatch):
+    """No last-announced version yet -> the current version is recorded but not posted.
+
+    Otherwise the very first deploy after shipping this feature would announce
+    "old news": whatever version happened to already be running.
+    """
+    _use_tmp_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(bot_main.version_notice, "get_current_version", lambda: "1.0.5")
+    report_mock = AsyncMock()
+    monkeypatch.setattr(bot_main.discord_utils, "report_to_log_channel", report_mock)
+
+    asyncio.run(bot_main._announce_deploy_if_new_version())
+
+    report_mock.assert_not_awaited()
+    assert storage.get_last_announced_version() == "1.0.5"
+
+
+def test_announce_deploy_skips_when_version_unchanged(tmp_path, monkeypatch):
+    """Same version as last announced -> no repeat post (e.g. a plain container restart)."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_last_announced_version("1.0.5")
+    monkeypatch.setattr(bot_main.version_notice, "get_current_version", lambda: "1.0.5")
+    report_mock = AsyncMock()
+    monkeypatch.setattr(bot_main.discord_utils, "report_to_log_channel", report_mock)
+
+    asyncio.run(bot_main._announce_deploy_if_new_version())
+
+    report_mock.assert_not_awaited()
+
+
+def test_announce_deploy_posts_and_persists_on_a_real_new_version(tmp_path, monkeypatch):
+    """A genuine version bump posts the changelog and updates the stored baseline."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_last_announced_version("1.0.4")
+    monkeypatch.setattr(bot_main.version_notice, "get_current_version", lambda: "1.0.5")
+    monkeypatch.setattr(
+        bot_main.version_notice, "get_latest_changelog_entry", lambda: "### Bug Fixes\n\n- fix a"
+    )
+    report_mock = AsyncMock()
+    monkeypatch.setattr(bot_main.discord_utils, "report_to_log_channel", report_mock)
+
+    asyncio.run(bot_main._announce_deploy_if_new_version())
+
+    report_mock.assert_awaited_once()
+    assert "1.0.5" in report_mock.call_args.args[1]
+    assert storage.get_last_announced_version() == "1.0.5"
 
 
 def test_help_command_mentions_every_module():
