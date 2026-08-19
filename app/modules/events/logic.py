@@ -25,6 +25,7 @@ EVENT_COLOR = 0x5865F2
 # string plus an end_time -- there's no in-game channel to point at.
 EVENT_LOCATION = "In-game"
 DEFAULT_EVENT_DURATION_MINUTES = 60
+DEFAULT_ANNOUNCEMENT_REMINDER_MINUTES = 30
 
 
 def parse_event_timestamp(date: str, time: str, utc_offset: str) -> int:
@@ -163,15 +164,32 @@ async def cancel_event_and_notify(
 
 async def _announce_cancellation(client: discord.Client, event: dict) -> None:
     """Best-effort @everyone ping in the announcements channel, if one is configured."""
+    await send_to_announcements_channel(client, f"@everyone 🚫 **{event['title']}** was cancelled.")
+
+
+async def send_to_announcements_channel(
+    client: discord.Client, text: str
+) -> discord.Message | None:
+    """Best-effort post to ANNOUNCEMENTS_CHANNEL_ID, if configured. Returns the sent
+    message (so callers can key storage off its id), or None if nothing was sent.
+    """
     if ANNOUNCEMENTS_CHANNEL_ID is None:
-        return
+        return None
     channel = await resolve_text_channel(client, ANNOUNCEMENTS_CHANNEL_ID)
     if channel is None:
-        return
+        return None
     try:
-        await channel.send(
-            f"@everyone 🚫 **{event['title']}** was cancelled.",
-            allowed_mentions=discord.AllowedMentions(everyone=True),
-        )
+        return await channel.send(text, allowed_mentions=discord.AllowedMentions(everyone=True))
     except discord.HTTPException:
-        logger.warning("could not post the cancellation announcement for %r", event["title"])
+        logger.warning("could not post to the announcements channel")
+        return None
+
+
+def build_announcement_text(title: str, timestamp: int) -> str:
+    """The initial, immediate announcement text for a real-world game event."""
+    return f"@everyone 📅 **{title}** — <t:{timestamp}:F> (<t:{timestamp}:R>)"
+
+
+def build_reminder_text(title: str, timestamp: int) -> str:
+    """The single reminder text posted reminder_minutes_before an announced event."""
+    return f"@everyone ⏰ **{title}** starts <t:{timestamp}:R>!"

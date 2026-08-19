@@ -15,6 +15,9 @@ def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(core_storage, "DATA_DIR", tmp_path)
     monkeypatch.setattr(core_storage, "ENABLED_MODULES_PATH", tmp_path / "enabled_modules.json")
     monkeypatch.setattr(storage, "EVENTS_PATH", tmp_path / "events.json")
+    monkeypatch.setattr(
+        storage, "GAME_EVENT_ANNOUNCEMENTS_PATH", tmp_path / "game_event_announcements.json"
+    )
 
 
 def _make_event(guild_id=1, channel_id=10, timestamp=9_999_999_999, **overrides):
@@ -33,6 +36,21 @@ def _make_event(guild_id=1, channel_id=10, timestamp=9_999_999_999, **overrides)
     return event
 
 
+def _make_announcement(guild_id=1, channel_id=10, timestamp=9_999_999_999, **overrides):
+    announcement = {
+        "guild_id": guild_id,
+        "channel_id": channel_id,
+        "title": "Strongest Lord",
+        "timestamp": timestamp,
+        "reminder_minutes_before": 30,
+        "duration_minutes": 60,
+        "reminded": False,
+        "discord_event_id": None,
+    }
+    announcement.update(overrides)
+    return announcement
+
+
 def _make_reaction_payload(user_id, guild_id, channel_id, message_id, emoji):
     payload = MagicMock()
     payload.user_id = user_id
@@ -41,6 +59,35 @@ def _make_reaction_payload(user_id, guild_id, channel_id, message_id, emoji):
     payload.message_id = message_id
     payload.emoji = discord.PartialEmoji(name=emoji)
     return payload
+
+
+# --- storage.save_announcement / get_announcement / all_announcements ----------------
+
+
+def test_save_and_get_announcement_round_trips(tmp_path, monkeypatch):
+    """A saved announcement reads back exactly as stored."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.save_announcement(42, _make_announcement(title="Strongest Lord"))
+
+    saved = storage.get_announcement(42)
+
+    assert saved["title"] == "Strongest Lord"
+
+
+def test_get_announcement_returns_none_when_not_tracked(tmp_path, monkeypatch):
+    """A message that was never a tracked announcement returns None, not an error."""
+    _use_tmp_store(tmp_path, monkeypatch)
+
+    assert storage.get_announcement(999) is None
+
+
+def test_all_announcements_returns_every_tracked_announcement(tmp_path, monkeypatch):
+    """Every saved announcement shows up, keyed by its message id."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.save_announcement(1, _make_announcement(title="A"))
+    storage.save_announcement(2, _make_announcement(title="B"))
+
+    assert set(storage.all_announcements().keys()) == {"1", "2"}
 
 
 # --- logic.parse_event_timestamp -------------------------------------------------
@@ -285,6 +332,70 @@ def test_require_enabled_passes_when_module_enabled(tmp_path, monkeypatch):
     assert asyncio.run(predicate(interaction)) is True
 
 
+# --- logic.build_announcement_text / build_reminder_text -----------------------------
+
+
+def test_build_announcement_text_includes_title_and_native_timestamp():
+    """The immediate announcement pings everyone and shows a native Discord timestamp."""
+    text = logic.build_announcement_text("Strongest Lord", 9_999_999_999)
+
+    assert "@everyone" in text
+    assert "Strongest Lord" in text
+    assert "<t:9999999999:F>" in text
+    assert "<t:9999999999:R>" in text
+
+
+def test_build_reminder_text_includes_title_and_native_timestamp():
+    """The reminder also pings everyone and shows a relative native timestamp."""
+    text = logic.build_reminder_text("Strongest Lord", 9_999_999_999)
+
+    assert "@everyone" in text
+    assert "Strongest Lord" in text
+    assert "<t:9999999999:R>" in text
+
+
+# --- logic.send_to_announcements_channel ----------------------------------------------
+
+
+def test_send_to_announcements_channel_noop_when_unconfigured(monkeypatch):
+    """No ANNOUNCEMENTS_CHANNEL_ID set -> the client is never touched, returns None."""
+    monkeypatch.setattr(logic, "ANNOUNCEMENTS_CHANNEL_ID", None)
+    client = MagicMock(get_channel=MagicMock(side_effect=AssertionError("should not run")))
+
+    result = asyncio.run(logic.send_to_announcements_channel(client, "hello"))
+
+    assert result is None
+
+
+def test_send_to_announcements_channel_sends_to_the_configured_channel(monkeypatch):
+    """A configured channel gets the exact text sent, with allowed_mentions for @everyone."""
+    monkeypatch.setattr(logic, "ANNOUNCEMENTS_CHANNEL_ID", 999)
+    channel = MagicMock(spec=discord.TextChannel)
+    sent_message = MagicMock()
+    channel.send = AsyncMock(return_value=sent_message)
+    client = MagicMock(get_channel=MagicMock(return_value=channel))
+
+    result = asyncio.run(logic.send_to_announcements_channel(client, "@everyone hi"))
+
+    assert result is sent_message
+    channel.send.assert_awaited_once()
+    assert channel.send.call_args.args[0] == "@everyone hi"
+    assert channel.send.call_args.kwargs["allowed_mentions"].everyone is True
+
+
+def test_send_to_announcements_channel_swallows_send_failures(monkeypatch):
+    """A permission error posting never propagates to the caller, returns None."""
+    monkeypatch.setattr(logic, "ANNOUNCEMENTS_CHANNEL_ID", 999)
+    channel = MagicMock(spec=discord.TextChannel)
+    response = MagicMock(status=403, reason="Forbidden")
+    channel.send = AsyncMock(side_effect=discord.Forbidden(response, "missing permissions"))
+    client = MagicMock(get_channel=MagicMock(return_value=channel))
+
+    result = asyncio.run(logic.send_to_announcements_channel(client, "hi"))  # must not raise
+
+    assert result is None
+
+
 # --- commands.createvent / listevents / cancel_event ---------------------------------
 
 
@@ -433,6 +544,88 @@ def test_cancel_event_reports_when_message_is_not_a_tracked_event(tmp_path, monk
     asyncio.run(commands.cancel_event.callback(interaction, message))
 
     assert "isn't a tracked event" in interaction.response.send_message.call_args.args[0]
+
+
+# --- commands.announceevent -----------------------------------------------------------
+
+
+def test_announceevent_rejects_outside_a_server(tmp_path, monkeypatch):
+    """The guild-only guard mirrors createvent's -- no DM usage."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(commands, "ANNOUNCEMENTS_CHANNEL_ID", 999)
+    interaction = MagicMock()
+    interaction.guild_id = None
+    interaction.response.send_message = AsyncMock()
+
+    asyncio.run(
+        commands.announceevent.callback(interaction, "Strongest Lord", "2099-01-01", "18:00", "0")
+    )
+
+    assert "only works inside a server" in interaction.response.send_message.call_args.args[0]
+
+
+def test_announceevent_rejects_when_announcements_channel_unconfigured(tmp_path, monkeypatch):
+    """Without ANNOUNCEMENTS_CHANNEL_ID set, this command has nothing to do -- say so clearly."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(commands, "ANNOUNCEMENTS_CHANNEL_ID", None)
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.response.send_message = AsyncMock()
+
+    asyncio.run(
+        commands.announceevent.callback(interaction, "Strongest Lord", "2099-01-01", "18:00", "0")
+    )
+
+    interaction.response.send_message.assert_awaited_once()
+    assert "ANNOUNCEMENTS_CHANNEL_ID" in interaction.response.send_message.call_args.args[0]
+
+
+def test_announceevent_rejects_an_invalid_date(tmp_path, monkeypatch):
+    """A bad date is reported back to the admin instead of posting a broken announcement."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(commands, "ANNOUNCEMENTS_CHANNEL_ID", 999)
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.response.send_message = AsyncMock()
+
+    asyncio.run(
+        commands.announceevent.callback(interaction, "Strongest Lord", "not-a-date", "18:00", "0")
+    )
+
+    assert "valid date" in interaction.response.send_message.call_args.args[0]
+
+
+def test_announceevent_posts_to_the_announcements_channel_and_saves(tmp_path, monkeypatch):
+    """The full happy path: posted with @everyone, native event created, tracked in storage."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(commands, "ANNOUNCEMENTS_CHANNEL_ID", 999)
+    channel = MagicMock(spec=discord.TextChannel)
+    sent_message = MagicMock()
+    sent_message.id = 777
+    channel.send = AsyncMock(return_value=sent_message)
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.channel_id = 10
+    interaction.user.id = 555
+    interaction.client = MagicMock(get_channel=MagicMock(return_value=channel))
+    interaction.guild.create_scheduled_event = AsyncMock(return_value=MagicMock(id=888))
+    interaction.response.send_message = AsyncMock()
+
+    asyncio.run(
+        commands.announceevent.callback(
+            interaction, "Strongest Lord", "2099-01-01", "18:00", "0", 30, 60
+        )
+    )
+
+    channel.send.assert_awaited_once()
+    sent_text = channel.send.call_args.args[0]
+    assert "@everyone" in sent_text
+    assert "Strongest Lord" in sent_text
+    assert channel.send.call_args.kwargs["allowed_mentions"].everyone is True
+    saved = storage.get_announcement(777)
+    assert saved["title"] == "Strongest Lord"
+    assert saved["discord_event_id"] == 888
+    interaction.response.send_message.assert_awaited_once()
 
 
 # --- logic.cancel_event_and_notify / _announce_cancellation --------------------------
@@ -745,3 +938,49 @@ def test_process_event_reminders_noop_when_nothing_due_yet(tmp_path, monkeypatch
     asyncio.run(scheduler._process_event_reminders(MagicMock(), 42, event, now=0))
 
     channel.send.assert_not_awaited()
+
+
+# --- scheduler._process_announcement_reminder -----------------------------------------
+
+
+def test_process_announcement_reminder_noop_before_its_due(tmp_path, monkeypatch):
+    """Well before reminder_minutes_before -- nothing sent, not marked reminded."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    announcement = _make_announcement(timestamp=1_000_000, reminder_minutes_before=30)
+    send_mock = AsyncMock()
+    monkeypatch.setattr(scheduler, "send_to_announcements_channel", send_mock)
+
+    asyncio.run(scheduler._process_announcement_reminder(MagicMock(), 42, announcement, now=0))
+
+    send_mock.assert_not_awaited()
+    assert announcement["reminded"] is False
+
+
+def test_process_announcement_reminder_sends_once_due_and_marks_reminded(tmp_path, monkeypatch):
+    """Once reminder_minutes_before is reached, the reminder goes out and is marked sent."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.save_announcement(
+        42, _make_announcement(title="Strongest Lord", timestamp=1000, reminder_minutes_before=30)
+    )
+    send_mock = AsyncMock()
+    monkeypatch.setattr(scheduler, "send_to_announcements_channel", send_mock)
+
+    now = 1000 - 30 * 60  # exactly reminder_minutes_before ahead of the event
+    asyncio.run(
+        scheduler._process_announcement_reminder(MagicMock(), 42, storage.get_announcement(42), now)
+    )
+
+    send_mock.assert_awaited_once()
+    assert storage.get_announcement(42)["reminded"] is True
+
+
+def test_process_announcement_reminder_does_not_repeat_once_already_reminded(tmp_path, monkeypatch):
+    """A second tick after the reminder already went out doesn't send it again."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    announcement = _make_announcement(timestamp=1000, reminder_minutes_before=30, reminded=True)
+    send_mock = AsyncMock()
+    monkeypatch.setattr(scheduler, "send_to_announcements_channel", send_mock)
+
+    asyncio.run(scheduler._process_announcement_reminder(MagicMock(), 42, announcement, now=1000))
+
+    send_mock.assert_not_awaited()

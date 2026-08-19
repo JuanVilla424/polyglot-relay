@@ -4,7 +4,11 @@ from discord.ext import tasks
 from app.discord_utils import resolve_text_channel
 from app.logger import logger
 from app.modules.events import storage
-from app.modules.events.logic import REMINDER_OFFSETS_MINUTES
+from app.modules.events.logic import (
+    REMINDER_OFFSETS_MINUTES,
+    build_reminder_text,
+    send_to_announcements_channel,
+)
 
 
 async def _send_reminder(channel: discord.abc.Messageable, event: dict, offset: int) -> None:
@@ -43,9 +47,28 @@ async def _process_event_reminders(
     storage.save_event(message_id, event)
 
 
+async def _process_announcement_reminder(
+    client: discord.Client, message_id: int, announcement: dict, now: int
+) -> None:
+    """Post the single reminder for one game-event announcement, if it's now due."""
+    if announcement.get("reminded"):
+        return
+    reminder_at = announcement["timestamp"] - announcement["reminder_minutes_before"] * 60
+    if now < reminder_at:
+        return
+
+    await send_to_announcements_channel(
+        client, build_reminder_text(announcement["title"], announcement["timestamp"])
+    )
+    announcement["reminded"] = True
+    storage.save_announcement(message_id, announcement)
+
+
 @tasks.loop(minutes=1)
 async def reminder_loop(client: discord.Client) -> None:
-    """Check every tracked event for reminder offsets that just came due."""
+    """Check every tracked event and game-event announcement for what's now due."""
     now = int(discord.utils.utcnow().timestamp())
     for message_id_str, event in list(storage.all_events().items()):
         await _process_event_reminders(client, int(message_id_str), event, now)
+    for message_id_str, announcement in list(storage.all_announcements().items()):
+        await _process_announcement_reminder(client, int(message_id_str), announcement, now)

@@ -201,6 +201,9 @@ async def help_command(interaction: discord.Interaction):
         "React ✅/❓/❌ on an event to RSVP — reminders go out to everyone who reacted ✅",
         "`/listevents` — list this server's upcoming events",
         'Right-click an event message → Apps → "Cancel Event" — admin: stop tracking it',
+        "`/announceevent <title> <date> <time> <utc_offset> [reminder_minutes_before] "
+        "[duration_minutes]` — admin: announce a real-world game event (e.g. Strongest "
+        "Lord) to the announcements channel now, plus one reminder before it starts",
         "",
         "**Verification** (module, disabled by default — "
         "`/polyglot-modules enable verification`)",

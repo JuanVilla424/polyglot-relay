@@ -217,6 +217,7 @@ _Off by default — an admin enables it per server with `/polyglot-modules enabl
 - **`/listevents`**: list this server's upcoming events, soonest first, each with a live "N going" count.
 - **Right-click an event message → Apps → Cancel Event** _(admin)_: stop tracking the event (no more reminders) and post a cancellation notice.
 - **Reminders**: sent automatically 1 hour, 30 minutes, and 10 minutes before the event, and once more right at the event's start — each one mentions only the members who RSVP'd ✅ Going, so nobody gets pinged for an event they didn't confirm. Creating an event with less than an hour's notice silently skips whichever early reminders would already be in the past, instead of firing them all at once.
+- **`/announceevent <title> <date> <time> <utc_offset> [reminder_minutes_before] [duration_minutes]`** _(admin, Manage Server permission)_: for real-world game events that affect the whole alliance (e.g. Strongest Lord, Wheel of Destiny) rather than something the bot schedules — posts an `@everyone` announcement to `ANNOUNCEMENTS_CHANNEL_ID` immediately, plus a single reminder `reminder_minutes_before` minutes ahead (default 30). No RSVP, since nobody confirms attendance to an in-game event. The bot never guesses these dates — an admin who already knows the real date (from the game itself) enters it once.
 
 #### Verification module
 

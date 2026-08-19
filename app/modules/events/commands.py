@@ -1,18 +1,23 @@
 import discord
 from discord import app_commands
 
+from app.discord_utils import report_to_log_channel
 from app.logger import logger
 from app.modules.checks import ModuleDisabledError, require_enabled
 from app.modules.events import storage
 from app.modules.events.logic import (
+    ANNOUNCEMENTS_CHANNEL_ID,
+    DEFAULT_ANNOUNCEMENT_REMINDER_MINUTES,
     DEFAULT_EVENT_DURATION_MINUTES,
     REMINDER_OFFSETS_MINUTES,
     RSVP_EMOJIS,
+    build_announcement_text,
     cancel_event_and_notify,
     create_scheduled_event,
     make_event_embed,
     parse_event_timestamp,
     pending_reminder_offsets,
+    send_to_announcements_channel,
 )
 from app.modules.events.views import EventView
 
@@ -181,7 +186,98 @@ async def cancel_event(interaction: discord.Interaction, message: discord.Messag
 cancel_event.error(_admin_command_error)
 
 
+@app_commands.command(
+    name="announceevent",
+    description="Admin: announce a real-world game event to the announcements channel",
+)
+@app_commands.describe(
+    title="Event name (e.g. Strongest Lord)",
+    date="Date, in YYYY-MM-DD",
+    time="Time, in HH:MM (24h)",
+    utc_offset="UTC offset for that time, e.g. -5, 0, +2",
+    reminder_minutes_before="Post a reminder this many minutes before -- default 30",
+    duration_minutes="How long the event runs, in minutes -- default 60",
+)
+@require_enabled("events")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def announceevent(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    interaction: discord.Interaction,
+    title: str,
+    date: str,
+    time: str,
+    utc_offset: str,
+    reminder_minutes_before: app_commands.Range[
+        int, 1, 1440
+    ] = DEFAULT_ANNOUNCEMENT_REMINDER_MINUTES,
+    duration_minutes: app_commands.Range[int, 1, 1440] = DEFAULT_EVENT_DURATION_MINUTES,
+):
+    """Post an @everyone announcement now, and a single reminder before it starts.
+
+    Doesn't guess dates -- an admin who already knows the real date (from the
+    game itself) loads it once; the bot only handles announcing on time.
+    """
+    if interaction.guild_id is None:
+        await interaction.response.send_message(
+            "This command only works inside a server.", ephemeral=True
+        )
+        return
+    if ANNOUNCEMENTS_CHANNEL_ID is None:
+        await interaction.response.send_message(
+            "ANNOUNCEMENTS_CHANNEL_ID isn't configured -- set it in .env first.", ephemeral=True
+        )
+        return
+
+    try:
+        event_timestamp = parse_event_timestamp(date, time, utc_offset)
+    except ValueError as exc:
+        await interaction.response.send_message(str(exc), ephemeral=True)
+        return
+
+    announcement = {
+        "guild_id": interaction.guild_id,
+        "channel_id": interaction.channel_id,
+        "title": title,
+        "timestamp": event_timestamp,
+        "reminder_minutes_before": reminder_minutes_before,
+        "duration_minutes": duration_minutes,
+        "reminded": False,
+        "discord_event_id": None,
+    }
+
+    sent = await send_to_announcements_channel(
+        interaction.client, build_announcement_text(title, event_timestamp)
+    )
+    if sent is None:
+        await interaction.response.send_message(
+            "Could not post to the announcements channel -- check ANNOUNCEMENTS_CHANNEL_ID "
+            "and the bot's permissions there.",
+            ephemeral=True,
+        )
+        return
+
+    scheduled_event = await create_scheduled_event(interaction.guild, announcement, None)
+    if scheduled_event is not None:
+        announcement["discord_event_id"] = scheduled_event.id
+
+    storage.save_announcement(sent.id, announcement)
+    await report_to_log_channel(
+        interaction.client, f"📅 <@{interaction.user.id}> announced **{title}**"
+    )
+
+    await interaction.response.send_message(f"Announced **{title}**.", ephemeral=True)
+    logger.info(
+        "game event %r announced by %s in guild %s",
+        title,
+        interaction.user.id,
+        interaction.guild_id,
+    )
+
+
+announceevent.error(_admin_command_error)
+
+
 def register(tree: app_commands.CommandTree) -> None:
     """Register every events slash/context-menu command on the shared tree."""
-    for command in (createvent, listevents, cancel_event):
+    for command in (createvent, listevents, cancel_event, announceevent):
         tree.add_command(command)
