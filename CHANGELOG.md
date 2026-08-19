@@ -1,3 +1,17 @@
+## [1.0.8] - 2026-08-19
+
+### Features
+
+- **core**: add polls module with native discord polls (`patch candidate`)
+- **core**: recognize more country flags when interpreting a translation reaction
+- **core**: create a native Discord Scheduled Event alongside /createvent
+
+### Bug Fixes
+
+- **core**: send the required privacy_level when creating a scheduled event
+- **core**: omit the image kwarg when creating a scheduled event without a picture
+- **core**: fall back to the default duration for events created before duration_minutes existed
+
 ## [1.0.7] - 2026-08-19
 
 ### Features
