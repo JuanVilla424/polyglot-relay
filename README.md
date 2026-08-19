@@ -218,6 +218,14 @@ _Off by default — an admin enables it per server with `/polyglot-modules enabl
 - **Right-click an event message → Apps → Cancel Event** _(admin)_: stop tracking the event (no more reminders) and post a cancellation notice.
 - **Reminders**: sent automatically 1 hour, 30 minutes, and 10 minutes before the event, and once more right at the event's start — each one mentions only the members who RSVP'd ✅ Going, so nobody gets pinged for an event they didn't confirm. Creating an event with less than an hour's notice silently skips whichever early reminders would already be in the past, instead of firing them all at once.
 
+#### Verification module
+
+_Off by default — an admin enables it per server with `/polyglot-modules enable verification`._
+
+- **React ✅ on a member's photo in the verify channel** _(Admin/Officer/Leader role, configured via `VERIFY_APPROVER_ROLE_IDS`)_: grants the configured Verified + Member roles to whoever posted it, and adds a ✅ confirmation reaction — automates what used to be done by hand, the visual check itself still stays with the approver.
+- **Optional Guest role removal**: if `GUEST_ROLE_ID` is set, that role is removed at the same time Verified + Member are granted (e.g. a "Guest" role given before verification) — leave it unset and this step is simply skipped, nothing else changes.
+- Needs the bot's own role positioned above the roles it assigns/removes, and the "Manage Roles" permission — see [Environment Setup](#-environment-setup).
+
 #### Polls module
 
 _Off by default — an admin enables it per server with `/polyglot-modules enable polls`._

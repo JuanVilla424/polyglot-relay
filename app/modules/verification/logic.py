@@ -1,6 +1,7 @@
 import discord
 
 from app.config import (
+    GUEST_ROLE_ID,
     MEMBER_ROLE_ID,
     VERIFIED_ROLE_ID,
     VERIFY_APPROVER_ROLE_IDS,
@@ -67,6 +68,23 @@ async def approve_and_assign_roles(
                 "permission and that its role is above Verified/Member in the hierarchy.",
             )
             return
+
+    if GUEST_ROLE_ID is not None:
+        guest_role = guild.get_role(GUEST_ROLE_ID)
+        if guest_role is None:
+            logger.warning("configured GUEST_ROLE_ID not found in guild %s", guild.id)
+        elif GUEST_ROLE_ID in author_role_ids:
+            try:
+                await author.remove_roles(guest_role, reason=f"Verified by {approver}")
+            except discord.Forbidden:
+                logger.warning(
+                    "missing permission or role hierarchy to remove Guest from %s", author.id
+                )
+                await report_to_log_channel(
+                    client,
+                    "⚠️ Could not remove the Guest role -- check the bot's Manage Roles "
+                    "permission and role hierarchy.",
+                )
 
     try:
         await message.add_reaction(APPROVAL_EMOJI)

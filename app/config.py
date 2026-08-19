@@ -30,6 +30,9 @@ VERIFIED_ROLE_ID = int(_verified_role_id) if _verified_role_id else None
 _member_role_id = os.getenv("MEMBER_ROLE_ID")
 MEMBER_ROLE_ID = int(_member_role_id) if _member_role_id else None
 
+_guest_role_id = os.getenv("GUEST_ROLE_ID")
+GUEST_ROLE_ID = int(_guest_role_id) if _guest_role_id else None
+
 _verify_approver_role_ids = os.getenv("VERIFY_APPROVER_ROLE_IDS", "")
 VERIFY_APPROVER_ROLE_IDS = [
     int(role_id.strip()) for role_id in _verify_approver_role_ids.split(",") if role_id.strip()
