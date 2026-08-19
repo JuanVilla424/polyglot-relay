@@ -1,3 +1,9 @@
+## [1.0.12] - 2026-08-19
+
+### Features
+
+- **core**: announce alliance-wide game events to the announcements channel (`patch candidate`)
+
 ## [1.0.11] - 2026-08-19
 
 ### Bug Fixes
