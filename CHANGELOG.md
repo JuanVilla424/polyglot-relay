@@ -1,3 +1,9 @@
+## [1.0.10] - 2026-08-19
+
+### Features
+
+- **core**: remove guest role on verification (`patch candidate`)
+
 ## [1.0.9] - 2026-08-19
 
 ### Features
