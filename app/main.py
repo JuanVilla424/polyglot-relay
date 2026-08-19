@@ -194,6 +194,11 @@ async def help_command(interaction: discord.Interaction):
         "React ✅/❓/❌ on an event to RSVP — reminders go out to everyone who reacted ✅",
         "`/listevents` — list this server's upcoming events",
         'Right-click an event message → Apps → "Cancel Event" — admin: stop tracking it',
+        "",
+        "**Verification** (module, disabled by default — "
+        "`/polyglot-modules enable verification`)",
+        "React ✅ on a member's photo in the verify channel — admin (Admin/Officer/Leader "
+        "role): grants the verified + member roles to whoever posted it",
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 

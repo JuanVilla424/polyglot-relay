@@ -21,6 +21,20 @@ LOG_CHANNEL_ID = int(_log_channel_id) if _log_channel_id else None
 _announcements_channel_id = os.getenv("ANNOUNCEMENTS_CHANNEL_ID")
 ANNOUNCEMENTS_CHANNEL_ID = int(_announcements_channel_id) if _announcements_channel_id else None
 
+_verify_channel_id = os.getenv("VERIFY_CHANNEL_ID")
+VERIFY_CHANNEL_ID = int(_verify_channel_id) if _verify_channel_id else None
+
+_verified_role_id = os.getenv("VERIFIED_ROLE_ID")
+VERIFIED_ROLE_ID = int(_verified_role_id) if _verified_role_id else None
+
+_member_role_id = os.getenv("MEMBER_ROLE_ID")
+MEMBER_ROLE_ID = int(_member_role_id) if _member_role_id else None
+
+_verify_approver_role_ids = os.getenv("VERIFY_APPROVER_ROLE_IDS", "")
+VERIFY_APPROVER_ROLE_IDS = [
+    int(role_id.strip()) for role_id in _verify_approver_role_ids.split(",") if role_id.strip()
+]
+
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 USER_LANGUAGES_PATH = DATA_DIR / "user_languages.json"
 ROLE_LANGUAGES_PATH = DATA_DIR / "role_languages.json"
