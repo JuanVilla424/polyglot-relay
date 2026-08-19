@@ -8,6 +8,7 @@ from app import discord_utils, storage, version_notice
 from app.config import DISCORD_BOT_TOKEN
 from app.logger import logger
 from app.modules import MODULES
+from app.modules.activity.scheduler import activity_digest_loop
 from app.modules.events.scheduler import reminder_loop
 from app.modules.events.views import EventView
 
@@ -69,6 +70,8 @@ async def on_ready():
         _heartbeat.start()
     if not reminder_loop.is_running():
         reminder_loop.start(client)
+    if not activity_digest_loop.is_running():
+        activity_digest_loop.start(client)
     await _announce_deploy_if_new_sha()
     logger.info("logged in as %s", client.user)
 
@@ -205,6 +208,12 @@ async def help_command(interaction: discord.Interaction):
         "`/createpoll <question> <options> [duration_hours]` — admin: post a native Discord "
         "poll (`options` separated by `;`, 2-10 answers, default duration 24h, max 168h)",
         'Right-click a poll message → Apps → "End Poll" — admin: end it before it expires',
+        "",
+        "**Activity** (module, disabled by default — `/polyglot-modules enable activity`)",
+        "`/activityreport [inactive_days]` — admin: list members inactive for at least "
+        "N days (default 7), plus members with no recorded activity yet",
+        "A weekly digest also posts automatically to the log channel once the module's "
+        "been on for a week",
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 

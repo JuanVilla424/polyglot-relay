@@ -32,7 +32,7 @@ Each server member sets their own preferred language once — directly, inherite
 - **Flag-reaction delivery by default:** the bot reacts to every message with one flag per language active in that channel — no translation happens, and no noise, until someone clicks one. Clicking a flag translates on demand, publicly, as a native reply. Admins can opt a server into always-on reply delivery, thread delivery, or private per-member DMs instead, with `/setbehavior`.
 - **Flexible language configuration:** members set their own language, admins can set it for a specific member, a role, or the whole server as a fallback — an explicit setting always overrides a role default.
 - **On-demand fallback:** right-click any message → Apps → "Translate Message" for a one-off ephemeral translation (no privileged Discord intent needed for this path).
-- **Modular:** built as a small platform of independent modules — Translation is on by default, and admins opt into others per server with `/polyglot-modules`. The Events module adds alliance event planning with RSVP flag reactions and automatic reminders (1h/30min/10min/at-start, mentioning only who confirmed), a free self-hosted alternative to paid bots like Raid-Helper. The Polls module posts native Discord polls with a simple `;`-separated options syntax and an admin "End Poll" early-close command.
+- **Modular:** built as a small platform of independent modules — Translation is on by default, and admins opt into others per server with `/polyglot-modules`. The Events module adds alliance event planning with RSVP flag reactions and automatic reminders (1h/30min/10min/at-start, mentioning only who confirmed), a free self-hosted alternative to paid bots like Raid-Helper. The Polls module posts native Discord polls with a simple `;`-separated options syntax and an admin "End Poll" early-close command. The Activity module gives admins an on-demand and weekly view of who's gone quiet, without ever leaving your own infrastructure.
 - **Fully self-hosted:** three Docker services (`libretranslate` for language detection, `nllb` for translation, `bot`), no external translation API or third-party bot dependency.
 - **Automated Version Control:** automatic version bumping, tagging, and promotion across branches (dev → test → prod → main).
 - **Automated Release Notes:** GitHub Releases with categorized changelogs generated from conventional commits.
@@ -225,6 +225,15 @@ _Off by default — an admin enables it per server with `/polyglot-modules enabl
 - **`/createpoll <question> <options> [duration_hours]`** _(admin, Manage Server permission)_: post a native Discord poll (shows up in Discord's own poll UI, with real vote counts). `options` is a single string with 2-10 answers separated by `;` (e.g. `"Yes; No; Maybe"`) — each answer up to 55 characters, the question up to 300. `duration_hours` defaults to 24 and caps at 168 (Discord's own 1-week limit). Every poll is single-choice; there's no image support, since Discord doesn't allow a poll and an attachment on the same message.
 - **Right-click a poll message → Apps → End Poll** _(admin)_: close the poll immediately instead of waiting for its duration to elapse.
 - Polls need no bot-side storage or configuration — Discord itself is the source of truth for the question, answers, votes, and expiry.
+
+#### Activity module
+
+_Off by default — an admin enables it per server with `/polyglot-modules enable activity`._
+
+- **`/activityreport [inactive_days]`** _(admin, Manage Server permission)_: list members who haven't sent a message or added a reaction in at least `inactive_days` (default 7), plus members with no recorded activity at all — kept as a separate section, since that can mean either "joined before this module was enabled" or "genuinely never active," not the same thing as a recent dropoff.
+- **Weekly digest**: the same report posts automatically to the configured log channel (`LOG_CHANNEL_ID`) once a week, per server, once the module has been enabled for at least that long — no separate channel or configuration needed.
+- **No retroactive backfill**: the bot only knows about activity from the moment the module is enabled onward — there's no way to reconstruct history from before that.
+- Counts both messages and reactions as activity — this only ever _records_ a timestamp, it never affects how reactions are handled by other modules (RSVP, verification approval, translation flag-clicks all still work exactly as before).
 
 ### 🧩 Modules
 
