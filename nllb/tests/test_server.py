@@ -207,6 +207,37 @@ def test_translate_protects_leading_emoji():
     fake_tokenizer.encode.assert_called_once_with("hello world")
 
 
+def test_translate_protects_leading_emoji_after_a_zero_width_space():
+    """Real bug: a zero-width space (U+200B) before the emoji -- common residue
+    from copy-pasting rich text -- broke the anchored emoji regex entirely, so
+    the emoji was never stripped, hit the tokenizer, and came back as <unk>.
+    """
+    zero_width_space = chr(0x200B)
+    fake_result = MagicMock()
+    fake_result.hypotheses = [["spa_Latn", "hola mundo"]]
+    fake_translator = MagicMock()
+    fake_translator.translate_batch.return_value = [fake_result]
+
+    fake_tokenizer = MagicMock()
+    fake_tokenizer.decode.return_value = "hola mundo"
+
+    with (
+        patch.object(server, "_translator", fake_translator),
+        patch.object(server, "_tokenizers", {"eng_Latn": fake_tokenizer}),
+    ):
+        response = client.post(
+            "/translate",
+            json={
+                "q": f"{zero_width_space}👑 hello world",
+                "source": "eng_Latn",
+                "target": "spa_Latn",
+            },
+        )
+
+    assert response.json() == {"translatedText": f"{zero_width_space}👑 hola mundo"}
+    fake_tokenizer.encode.assert_called_once_with("hello world")
+
+
 def test_translate_skips_the_translator_for_a_heading_only_line():
     """A heading marker with nothing after it (no text) never reaches the translator."""
     fake_translator = MagicMock()

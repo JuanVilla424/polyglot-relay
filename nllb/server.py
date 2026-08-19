@@ -23,7 +23,18 @@ _MAX_DECODING_LENGTH = 2048
 # corrupted or dropped inconsistently per target language. Strip these off before
 # translating and reattach them untouched afterwards.
 _HEADER_RE = re.compile(r"^(#{1,6}\s+)")
-_EMOJI_RE = re.compile("^[\U0001f1e6-\U0001f1ff\U00002600-\U000027bf\U0001f300-\U0001faff️]+\\s*")
+# Zero-width space/joiner/BOM (U+200B/U+200C/U+200D/U+FEFF) commonly precede an
+# emoji as residue from copy-pasting rich text (e.g. from a notes app or wiki).
+# Optional at the start so they don't break the anchored emoji match below --
+# real bug: they did, the emoji was never stripped, and NLLB emitted a literal
+# <unk> for it since it isn't in the model's vocabulary.
+_INVISIBLE_PREFIX_CHARS = "".join(
+    chr(code_point) for code_point in (0x200B, 0x200C, 0x200D, 0xFEFF)
+)
+_EMOJI_RE = re.compile(
+    f"^[{_INVISIBLE_PREFIX_CHARS}]*"
+    "[\U0001f1e6-\U0001f1ff\U00002600-\U000027bf\U0001f300-\U0001faff️]+\\s*"
+)
 
 # NLLB also stops early mid-sentence when a single line packs more than one
 # sentence together (very common in prose without a line break per sentence) —
