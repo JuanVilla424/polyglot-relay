@@ -114,7 +114,67 @@ ISO_TO_FLAG = {
     "bn": "🇧🇩",
 }
 
+
+# For INTERPRETING a flag reaction someone else added, many more country
+# flags are recognized than the single one ISO_TO_FLAG uses for adding
+# reactions -- people naturally react with their own country's flag (e.g. a
+# Mexican reacting with 🇲🇽, not 🇪🇸), not the one "representative" flag this
+# bot picks when it adds reactions. Only countries where one of this bot's
+# supported languages is unambiguously dominant are included; genuinely
+# multilingual countries (Canada's Quebec, Switzerland, Belgium) are
+# deliberately left out rather than guessing wrong -- worst case if a flag
+# isn't here, the reaction is just ignored, same as today.
+_EXTRA_FLAGS_TO_ISO = {
+    # Spanish
+    "🇲🇽": "es",
+    "🇦🇷": "es",
+    "🇨🇴": "es",
+    "🇨🇱": "es",
+    "🇵🇪": "es",
+    "🇻🇪": "es",
+    "🇪🇨": "es",
+    "🇬🇹": "es",
+    "🇨🇺": "es",
+    "🇧🇴": "es",
+    "🇩🇴": "es",
+    "🇭🇳": "es",
+    "🇵🇾": "es",
+    "🇸🇻": "es",
+    "🇳🇮": "es",
+    "🇨🇷": "es",
+    "🇵🇦": "es",
+    "🇺🇾": "es",
+    # Portuguese
+    "🇧🇷": "pt",
+    "🇦🇴": "pt",
+    "🇲🇿": "pt",
+    # English
+    "🇺🇸": "en",
+    "🇨🇦": "en",
+    "🇦🇺": "en",
+    "🇳🇿": "en",
+    "🇮🇪": "en",
+    "🇿🇦": "en",
+    # German
+    "🇦🇹": "de",
+    # Arabic
+    "🇪🇬": "ar",
+    "🇦🇪": "ar",
+    "🇲🇦": "ar",
+    # Chinese
+    "🇹🇼": "zh",
+    "🇭🇰": "zh",
+    "🇸🇬": "zh",
+    # Russian
+    "🇧🇾": "ru",
+    # Romanian
+    "🇲🇩": "ro",
+    # Greek
+    "🇨🇾": "el",
+}
+
 FLAG_TO_ISO = {flag: iso for iso, flag in ISO_TO_FLAG.items()}
+FLAG_TO_ISO.update(_EXTRA_FLAGS_TO_ISO)
 
 
 # Validated categorical palette (8 slots, fixed order, CVD-safe adjacent pairs),
