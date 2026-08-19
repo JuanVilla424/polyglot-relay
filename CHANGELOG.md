@@ -1,3 +1,9 @@
+## [1.0.9] - 2026-08-19
+
+### Features
+
+- **core**: add activity module with admin reports (`patch candidate`)
+
 ## [1.0.8] - 2026-08-19
 
 ### Features

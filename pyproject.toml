@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "polyglot-relay"
-version = "1.0.8"
+version = "1.0.9"
 description = "Self-hosted Discord auto-translation bot powered by LibreTranslate"
 authors = ["B <g46327wsj1.marbling129@passinbox.com>"]
 license = "GPL-3.0-only"
