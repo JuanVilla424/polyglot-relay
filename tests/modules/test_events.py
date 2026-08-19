@@ -166,6 +166,68 @@ def test_make_event_embed_omits_image_when_include_image_is_false():
     assert embed.image.url is None
 
 
+# --- logic.create_scheduled_event / cancel_scheduled_event ---------------------------
+
+
+def test_create_scheduled_event_calls_the_discord_api_with_external_entity_type():
+    """A native Discord Scheduled Event is created alongside the bot's own embed."""
+    event = _make_event(
+        title="Rally Point", description="Bring siege", timestamp=9_999_999_999, duration_minutes=90
+    )
+    guild = MagicMock()
+    scheduled_event = MagicMock(id=42)
+    guild.create_scheduled_event = AsyncMock(return_value=scheduled_event)
+
+    result = asyncio.run(logic.create_scheduled_event(guild, event, image_bytes=b"png-bytes"))
+
+    assert result is scheduled_event
+    guild.create_scheduled_event.assert_awaited_once()
+    kwargs = guild.create_scheduled_event.call_args.kwargs
+    assert kwargs["name"] == "Rally Point"
+    assert kwargs["entity_type"] == discord.EntityType.external
+    assert kwargs["location"] == logic.EVENT_LOCATION
+    assert kwargs["image"] == b"png-bytes"
+    assert kwargs["end_time"] - kwargs["start_time"] == dt.timedelta(minutes=90)
+
+
+def test_create_scheduled_event_returns_none_when_forbidden():
+    """Missing Manage Events permission doesn't block the rest of event creation."""
+    event = _make_event(duration_minutes=60)
+    guild = MagicMock()
+    response = MagicMock(status=403, reason="Forbidden")
+    guild.create_scheduled_event = AsyncMock(
+        side_effect=discord.Forbidden(response, "missing access")
+    )
+
+    result = asyncio.run(logic.create_scheduled_event(guild, event, image_bytes=None))
+
+    assert result is None
+
+
+def test_cancel_scheduled_event_cancels_the_fetched_event():
+    """Cancelling the bot's event also cancels the linked native Discord event."""
+    guild = MagicMock()
+    scheduled_event = MagicMock()
+    scheduled_event.cancel = AsyncMock()
+    guild.fetch_scheduled_event = AsyncMock(return_value=scheduled_event)
+
+    asyncio.run(logic.cancel_scheduled_event(guild, 42))
+
+    guild.fetch_scheduled_event.assert_awaited_once_with(42)
+    scheduled_event.cancel.assert_awaited_once()
+
+
+def test_cancel_scheduled_event_is_best_effort_on_failure():
+    """A native event already deleted by hand doesn't blow up cancellation."""
+    guild = MagicMock()
+    response = MagicMock(status=404, reason="Not Found")
+    guild.fetch_scheduled_event = AsyncMock(
+        side_effect=discord.NotFound(response, "Unknown Scheduled Event")
+    )
+
+    asyncio.run(logic.cancel_scheduled_event(guild, 42))  # must not raise
+
+
 # --- app.modules.checks.require_enabled ---------------------------------------------
 
 
@@ -215,6 +277,7 @@ def test_createvent_posts_the_embed_adds_rsvp_reactions_and_saves_the_event(tmp_
     interaction.channel_id = 10
     interaction.user.id = 555
     interaction.response.send_message = AsyncMock()
+    interaction.guild.create_scheduled_event = AsyncMock(return_value=MagicMock(id=888))
     sent_message = MagicMock()
     sent_message.id = 777
     sent_message.embeds = []
@@ -223,7 +286,7 @@ def test_createvent_posts_the_embed_adds_rsvp_reactions_and_saves_the_event(tmp_
 
     asyncio.run(
         commands.createvent.callback(
-            interaction, "Rally Point", "2099-01-01", "18:00", "0", "Bring siege", None
+            interaction, "Rally Point", "2099-01-01", "18:00", "0", 60, "Bring siege", None
         )
     )
 
@@ -233,6 +296,8 @@ def test_createvent_posts_the_embed_adds_rsvp_reactions_and_saves_the_event(tmp_
     assert saved["title"] == "Rally Point"
     assert saved["guild_id"] == 1
     assert saved["created_by"] == 555
+    assert saved["duration_minutes"] == 60
+    assert saved["discord_event_id"] == 888
 
 
 def test_createvent_pre_marks_reminders_already_elapsed_at_creation(tmp_path, monkeypatch):
@@ -243,6 +308,7 @@ def test_createvent_pre_marks_reminders_already_elapsed_at_creation(tmp_path, mo
     interaction.channel_id = 10
     interaction.user.id = 555
     interaction.response.send_message = AsyncMock()
+    interaction.guild.create_scheduled_event = AsyncMock(return_value=MagicMock(id=889))
     sent_message = MagicMock()
     sent_message.id = 888
     sent_message.embeds = []
@@ -354,6 +420,22 @@ def test_cancel_event_and_notify_removes_the_event_and_replies(tmp_path, monkeyp
     assert status == "Event cancelled."
     assert storage.get_event(42) is None
     message.reply.assert_awaited_once()
+
+
+def test_cancel_event_and_notify_also_cancels_the_linked_native_event(tmp_path, monkeypatch):
+    """An event created with a native Discord Scheduled Event gets it cancelled too."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.save_event(42, _make_event(title="Rally", discord_event_id=999))
+    message = MagicMock()
+    message.id = 42
+    message.reply = AsyncMock()
+    cancel_mock = AsyncMock()
+    monkeypatch.setattr(logic, "cancel_scheduled_event", cancel_mock)
+    client = MagicMock()
+
+    asyncio.run(logic.cancel_event_and_notify(client, message, actor_id=555))
+
+    cancel_mock.assert_awaited_once_with(message.guild, 999)
 
 
 def test_cancel_event_and_notify_reports_when_not_tracked(tmp_path, monkeypatch):

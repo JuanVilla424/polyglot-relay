@@ -190,7 +190,8 @@ async def help_command(interaction: discord.Interaction):
         "(e.g. a flag-reaction role-picker)",
         "",
         "**Events** (module, disabled by default — `/polyglot-modules enable events`)",
-        "`/createvent <title> <date> <time> <utc_offset> [description] [image]` — admin: create an event",
+        "`/createvent <title> <date> <time> <utc_offset> [duration_minutes] [description] "
+        "[image]` — admin: create an event (also posts it to Discord's own Events tab)",
         "React ✅/❓/❌ on an event to RSVP — reminders go out to everyone who reacted ✅",
         "`/listevents` — list this server's upcoming events",
         'Right-click an event message → Apps → "Cancel Event" — admin: stop tracking it',

@@ -5,9 +5,11 @@ from app.logger import logger
 from app.modules.checks import ModuleDisabledError, require_enabled
 from app.modules.events import storage
 from app.modules.events.logic import (
+    DEFAULT_EVENT_DURATION_MINUTES,
     REMINDER_OFFSETS_MINUTES,
     RSVP_EMOJIS,
     cancel_event_and_notify,
+    create_scheduled_event,
     make_event_embed,
     parse_event_timestamp,
     pending_reminder_offsets,
@@ -42,6 +44,7 @@ async def _admin_command_error(
     date="Date, in YYYY-MM-DD",
     time="Time, in HH:MM (24h)",
     utc_offset="UTC offset for that time, e.g. -5, 0, +2",
+    duration_minutes="How long the event runs, in minutes -- default 60",
     description="Extra details (coordinates, notes) -- optional",
     image="Screenshot or map image -- optional",
 )
@@ -54,6 +57,7 @@ async def createvent(  # pylint: disable=too-many-arguments,too-many-positional-
     date: str,
     time: str,
     utc_offset: str,
+    duration_minutes: app_commands.Range[int, 1, 1440] = DEFAULT_EVENT_DURATION_MINUTES,
     description: str = "",
     image: discord.Attachment | None = None,
 ):
@@ -81,13 +85,17 @@ async def createvent(  # pylint: disable=too-many-arguments,too-many-positional-
         "description": description,
         "image_url": None,
         "timestamp": event_timestamp,
+        "duration_minutes": duration_minutes,
         "created_by": interaction.user.id,
         "rsvps": {},
         "reminders_sent": reminders_sent,
+        "discord_event_id": None,
     }
 
     files = []
+    image_bytes = None
     if image is not None:
+        image_bytes = await image.read()
         file = await image.to_file()
         files.append(file)
         event["image_url"] = f"attachment://{file.filename}"
@@ -101,6 +109,10 @@ async def createvent(  # pylint: disable=too-many-arguments,too-many-positional-
         # Discord's own CDN URL for the now-uploaded attachment -- stable and
         # reusable in future embed edits (RSVP changes) without re-uploading.
         event["image_url"] = sent.embeds[0].image.url
+
+    scheduled_event = await create_scheduled_event(interaction.guild, event, image_bytes)
+    if scheduled_event is not None:
+        event["discord_event_id"] = scheduled_event.id
 
     storage.save_event(sent.id, event)
     for emoji in RSVP_EMOJIS:

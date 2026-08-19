@@ -19,6 +19,13 @@ _TIME_RE = re.compile(r"^\d{2}:\d{2}$")
 
 EVENT_COLOR = 0x5865F2
 
+# Native Discord Scheduled Events (the server's own "Events" tab) require an
+# entity_type; these events aren't tied to a voice/stage channel, so
+# "external" is the right fit, and that entity type requires a location
+# string plus an end_time -- there's no in-game channel to point at.
+EVENT_LOCATION = "In-game"
+DEFAULT_EVENT_DURATION_MINUTES = 60
+
 
 def parse_event_timestamp(date: str, time: str, utc_offset: str) -> int:
     """Parse date/time/utc_offset into a unix timestamp.
@@ -81,6 +88,42 @@ def make_event_embed(event: dict, include_image: bool = True) -> discord.Embed:
     return embed
 
 
+async def create_scheduled_event(
+    guild: discord.Guild, event: dict, image_bytes: bytes | None
+) -> discord.ScheduledEvent | None:
+    """Best-effort: also create a native Discord Scheduled Event so this shows
+    up in the server's own Events tab, not just as a channel message.
+
+    Needs the bot's Manage Events permission -- if missing, this quietly
+    skips instead of blocking the rest of event creation (the embed/RSVP
+    flow this bot already has works independently of this).
+    """
+    start_time = datetime.fromtimestamp(event["timestamp"], tz=timezone.utc)
+    end_time = start_time + timedelta(minutes=event["duration_minutes"])
+    try:
+        return await guild.create_scheduled_event(
+            name=event["title"],
+            description=event.get("description") or None,
+            start_time=start_time,
+            end_time=end_time,
+            entity_type=discord.EntityType.external,
+            location=EVENT_LOCATION,
+            image=image_bytes,
+        )
+    except discord.Forbidden:
+        logger.warning("missing Manage Events permission, skipping the native Discord event")
+        return None
+
+
+async def cancel_scheduled_event(guild: discord.Guild, discord_event_id: int) -> None:
+    """Best-effort: cancel the native Discord event tied to this event, if any."""
+    try:
+        scheduled_event = await guild.fetch_scheduled_event(discord_event_id)
+        await scheduled_event.cancel()
+    except discord.HTTPException:
+        logger.warning("could not cancel the native Discord event %s", discord_event_id)
+
+
 async def cancel_event_and_notify(
     client: discord.Client, message: discord.Message, actor_id: int
 ) -> str:
@@ -94,6 +137,8 @@ async def cancel_event_and_notify(
         return "That message isn't a tracked event."
 
     storage.delete_event(message.id)
+    if event.get("discord_event_id"):
+        await cancel_scheduled_event(message.guild, event["discord_event_id"])
     try:
         await message.reply("🚫 This event was cancelled.", mention_author=False)
     except discord.HTTPException:
