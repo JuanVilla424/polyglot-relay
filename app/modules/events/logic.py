@@ -101,16 +101,20 @@ async def create_scheduled_event(
     start_time = datetime.fromtimestamp(event["timestamp"], tz=timezone.utc)
     duration_minutes = event.get("duration_minutes", DEFAULT_EVENT_DURATION_MINUTES)
     end_time = start_time + timedelta(minutes=duration_minutes)
+    kwargs = {
+        "name": event["title"],
+        "description": event.get("description") or None,
+        "start_time": start_time,
+        "end_time": end_time,
+        "entity_type": discord.EntityType.external,
+        "location": EVENT_LOCATION,
+    }
+    # discord.py tries to base64-encode `image` unconditionally, even when
+    # it's None, and crashes -- only pass it at all when there's a real image.
+    if image_bytes is not None:
+        kwargs["image"] = image_bytes
     try:
-        return await guild.create_scheduled_event(
-            name=event["title"],
-            description=event.get("description") or None,
-            start_time=start_time,
-            end_time=end_time,
-            entity_type=discord.EntityType.external,
-            location=EVENT_LOCATION,
-            image=image_bytes,
-        )
+        return await guild.create_scheduled_event(**kwargs)
     except discord.Forbidden:
         logger.warning("missing Manage Events permission, skipping the native Discord event")
         return None

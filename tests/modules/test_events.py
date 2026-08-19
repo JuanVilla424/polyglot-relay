@@ -190,6 +190,20 @@ def test_create_scheduled_event_calls_the_discord_api_with_external_entity_type(
     assert kwargs["end_time"] - kwargs["start_time"] == dt.timedelta(minutes=90)
 
 
+def test_create_scheduled_event_omits_the_image_kwarg_when_there_is_no_image():
+    """Real bug: discord.py tries to base64-encode `image` even when it's
+    explicitly None and crashes with AttributeError -- the kwarg must be left
+    out entirely for an event with no picture, not passed as None.
+    """
+    event = _make_event(timestamp=9_999_999_999, duration_minutes=60)
+    guild = MagicMock()
+    guild.create_scheduled_event = AsyncMock(return_value=MagicMock(id=1))
+
+    asyncio.run(logic.create_scheduled_event(guild, event, image_bytes=None))
+
+    assert "image" not in guild.create_scheduled_event.call_args.kwargs
+
+
 def test_create_scheduled_event_falls_back_to_the_default_duration_when_missing():
     """Real case: events created before this feature existed have no stored
     duration_minutes at all -- must not KeyError, just use the default.
