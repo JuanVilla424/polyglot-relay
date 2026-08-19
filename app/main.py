@@ -200,6 +200,11 @@ async def help_command(interaction: discord.Interaction):
         "`/polyglot-modules enable verification`)",
         "React ✅ on a member's photo in the verify channel — admin (Admin/Officer/Leader "
         "role): grants the verified + member roles to whoever posted it",
+        "",
+        "**Polls** (module, disabled by default — `/polyglot-modules enable polls`)",
+        "`/createpoll <question> <options> [duration_hours]` — admin: post a native Discord "
+        "poll (`options` separated by `;`, 2-10 answers, default duration 24h, max 168h)",
+        'Right-click a poll message → Apps → "End Poll" — admin: end it before it expires',
     ]
     await interaction.response.send_message("\n".join(lines), ephemeral=True)
 

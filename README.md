@@ -32,7 +32,7 @@ Each server member sets their own preferred language once — directly, inherite
 - **Flag-reaction delivery by default:** the bot reacts to every message with one flag per language active in that channel — no translation happens, and no noise, until someone clicks one. Clicking a flag translates on demand, publicly, as a native reply. Admins can opt a server into always-on reply delivery, thread delivery, or private per-member DMs instead, with `/setbehavior`.
 - **Flexible language configuration:** members set their own language, admins can set it for a specific member, a role, or the whole server as a fallback — an explicit setting always overrides a role default.
 - **On-demand fallback:** right-click any message → Apps → "Translate Message" for a one-off ephemeral translation (no privileged Discord intent needed for this path).
-- **Modular:** built as a small platform of independent modules — Translation is on by default, and admins opt into others per server with `/polyglot-modules`. The Events module adds alliance event planning with RSVP flag reactions and automatic reminders (1h/30min/10min/at-start, mentioning only who confirmed), a free self-hosted alternative to paid bots like Raid-Helper.
+- **Modular:** built as a small platform of independent modules — Translation is on by default, and admins opt into others per server with `/polyglot-modules`. The Events module adds alliance event planning with RSVP flag reactions and automatic reminders (1h/30min/10min/at-start, mentioning only who confirmed), a free self-hosted alternative to paid bots like Raid-Helper. The Polls module posts native Discord polls with a simple `;`-separated options syntax and an admin "End Poll" early-close command.
 - **Fully self-hosted:** three Docker services (`libretranslate` for language detection, `nllb` for translation, `bot`), no external translation API or third-party bot dependency.
 - **Automated Version Control:** automatic version bumping, tagging, and promotion across branches (dev → test → prod → main).
 - **Automated Release Notes:** GitHub Releases with categorized changelogs generated from conventional commits.
@@ -217,6 +217,14 @@ _Off by default — an admin enables it per server with `/polyglot-modules enabl
 - **`/listevents`**: list this server's upcoming events, soonest first, each with a live "N going" count.
 - **Right-click an event message → Apps → Cancel Event** _(admin)_: stop tracking the event (no more reminders) and post a cancellation notice.
 - **Reminders**: sent automatically 1 hour, 30 minutes, and 10 minutes before the event, and once more right at the event's start — each one mentions only the members who RSVP'd ✅ Going, so nobody gets pinged for an event they didn't confirm. Creating an event with less than an hour's notice silently skips whichever early reminders would already be in the past, instead of firing them all at once.
+
+#### Polls module
+
+_Off by default — an admin enables it per server with `/polyglot-modules enable polls`._
+
+- **`/createpoll <question> <options> [duration_hours]`** _(admin, Manage Server permission)_: post a native Discord poll (shows up in Discord's own poll UI, with real vote counts). `options` is a single string with 2-10 answers separated by `;` (e.g. `"Yes; No; Maybe"`) — each answer up to 55 characters, the question up to 300. `duration_hours` defaults to 24 and caps at 168 (Discord's own 1-week limit). Every poll is single-choice; there's no image support, since Discord doesn't allow a poll and an attachment on the same message.
+- **Right-click a poll message → Apps → End Poll** _(admin)_: close the poll immediately instead of waiting for its duration to elapse.
+- Polls need no bot-side storage or configuration — Discord itself is the source of truth for the question, answers, votes, and expiry.
 
 ### 🧩 Modules
 
