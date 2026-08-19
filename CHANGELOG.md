@@ -1,3 +1,14 @@
+## [1.0.7] - 2026-08-19
+
+### Features
+
+- **core**: add verification module for photo-based role approval (`patch candidate`)
+
+### Bug Fixes
+
+- **core**: generalize deploy.sh to accept any compose service, not just bot
+- **core**: strip zero-width space before a leading emoji so nllb keeps it out of the model
+
 ## [1.0.6] - 2026-08-19
 
 ### Features
