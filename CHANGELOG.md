@@ -1,3 +1,9 @@
+## [1.0.11] - 2026-08-19
+
+### Bug Fixes
+
+- **core**: use clean_content and stop repeating flag-triggered translations (`patch candidate`)
+
 ## [1.0.10] - 2026-08-19
 
 ### Features
