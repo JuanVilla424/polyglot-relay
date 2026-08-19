@@ -99,7 +99,8 @@ async def create_scheduled_event(
     flow this bot already has works independently of this).
     """
     start_time = datetime.fromtimestamp(event["timestamp"], tz=timezone.utc)
-    end_time = start_time + timedelta(minutes=event["duration_minutes"])
+    duration_minutes = event.get("duration_minutes", DEFAULT_EVENT_DURATION_MINUTES)
+    end_time = start_time + timedelta(minutes=duration_minutes)
     try:
         return await guild.create_scheduled_event(
             name=event["title"],

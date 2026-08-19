@@ -190,6 +190,23 @@ def test_create_scheduled_event_calls_the_discord_api_with_external_entity_type(
     assert kwargs["end_time"] - kwargs["start_time"] == dt.timedelta(minutes=90)
 
 
+def test_create_scheduled_event_falls_back_to_the_default_duration_when_missing():
+    """Real case: events created before this feature existed have no stored
+    duration_minutes at all -- must not KeyError, just use the default.
+    """
+    event = _make_event(timestamp=9_999_999_999)
+    assert "duration_minutes" not in event
+    guild = MagicMock()
+    guild.create_scheduled_event = AsyncMock(return_value=MagicMock(id=1))
+
+    asyncio.run(logic.create_scheduled_event(guild, event, image_bytes=None))
+
+    kwargs = guild.create_scheduled_event.call_args.kwargs
+    assert kwargs["end_time"] - kwargs["start_time"] == dt.timedelta(
+        minutes=logic.DEFAULT_EVENT_DURATION_MINUTES
+    )
+
+
 def test_create_scheduled_event_returns_none_when_forbidden():
     """Missing Manage Events permission doesn't block the rest of event creation."""
     event = _make_event(duration_minutes=60)
