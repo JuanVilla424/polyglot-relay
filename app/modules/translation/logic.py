@@ -13,6 +13,10 @@ DEFAULT_SERVER_LANGUAGE = "en"
 # (translate on demand). An admin can override this per guild with /setbehavior.
 DEFAULT_DELIVERY_MODE = "reactions"
 
+# How long an entry in delivered_languages.json survives with no new language
+# reacted on that message before it's pruned by the cleanup loop -- see scheduler.py.
+DELIVERED_LANGUAGES_TTL_DAYS = 30
+
 DISCORD_EMBEDS_PER_MESSAGE = 10
 DISCORD_EMBED_TOTAL_CHAR_LIMIT = 5500  # conservative margin under Discord's 6000 cap
 DISCORD_EMBED_DESCRIPTION_LIMIT = 4096
@@ -162,7 +166,7 @@ async def _deliver_as_reactions(message: discord.Message, target_languages: set[
     flag (e.g. Catalan) are skipped too, rather than failing the whole batch.
     """
     try:
-        detected = await translator.detect_language(message.content)
+        detected = await translator.detect_language(message.clean_content)
     except Exception:
         logger.exception("language detection failed before adding reactions")
         detected = None
@@ -189,10 +193,17 @@ async def _translate_single_language(message: discord.Message, target_lang: str)
     """Translate one message into one language and reply with it publicly.
 
     Used by the reactions delivery mode: called on demand when someone reacts
-    with a flag, instead of translating every active language upfront.
+    with a flag, instead of translating every active language upfront. Once a
+    language has been delivered for a message it's never repeated -- not on a
+    repeat click by another member, not on the same member removing and
+    re-adding their reaction (translation/handlers.py has no reaction-remove
+    handler, so removing a flag never undoes this).
     """
+    if storage.is_language_delivered(message.id, target_lang):
+        return
+
     try:
-        translated, detected = await translator.translate(message.content, target_lang)
+        translated, detected = await translator.translate(message.clean_content, target_lang)
     except Exception:
         logger.exception("on-demand reaction translation failed for language %s", target_lang)
         return
@@ -206,6 +217,13 @@ async def _translate_single_language(message: discord.Message, target_lang: str)
             await message.reply(embeds=batch, mention_author=False)
     except discord.HTTPException:
         logger.exception("failed to send reaction-triggered translation reply")
+        return
+
+    # Only marked after every batch sends successfully -- a failed send leaves
+    # this language retryable on the next flag click, instead of stuck forever.
+    storage.mark_language_delivered(
+        message.id, target_lang, int(discord.utils.utcnow().timestamp())
+    )
 
 
 _DELIVERY_MODES = {"reply": _deliver_as_reply, "thread": _deliver_as_thread}
@@ -265,7 +283,7 @@ async def _translate_and_deliver(message: discord.Message) -> str:
     embeds_by_lang: dict[str, list[discord.Embed]] = {}
     for target_lang in sorted(target_languages):
         try:
-            translated, detected = await translator.translate(message.content, target_lang)
+            translated, detected = await translator.translate(message.clean_content, target_lang)
         except Exception:
             logger.exception("channel translation failed for language %s", target_lang)
             continue

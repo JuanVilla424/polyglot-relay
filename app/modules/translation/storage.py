@@ -1,5 +1,6 @@
 from app import storage
 from app.config import (
+    DELIVERED_LANGUAGES_PATH,
     DELIVERY_MODE_PATH,
     EXCLUDED_CHANNELS_PATH,
     ROLE_LANGUAGES_PATH,
@@ -102,3 +103,37 @@ def set_channel_excluded(guild_id: int, channel_id: int, excluded: bool) -> None
         storage.write_json(EXCLUDED_CHANNELS_PATH, data)
     else:
         storage.clear_key(EXCLUDED_CHANNELS_PATH, key)
+
+
+def is_language_delivered(message_id: int, language_code: str) -> bool:
+    """Whether this language's on-demand flag translation was already sent for this message."""
+    entry = storage.read_json(DELIVERED_LANGUAGES_PATH).get(str(message_id))
+    return entry is not None and language_code in entry["languages"]
+
+
+def mark_language_delivered(message_id: int, language_code: str, now: int) -> None:
+    """Record that this language's translation was just sent for this message."""
+    data = storage.read_json(DELIVERED_LANGUAGES_PATH)
+    entry = data.setdefault(str(message_id), {"languages": [], "last_updated": now})
+    if language_code not in entry["languages"]:
+        entry["languages"].append(language_code)
+    entry["last_updated"] = now
+    storage.write_json(DELIVERED_LANGUAGES_PATH, data)
+
+
+def prune_stale_delivered_languages(now: int, max_age_seconds: int) -> int:
+    """Remove tracked messages whose last delivery is older than max_age_seconds.
+
+    Keeps this storage bounded -- unlike every other per-guild/per-member store
+    in this bot, this one grows per message, which has no natural cap.
+    Returns how many entries were removed.
+    """
+    data = storage.read_json(DELIVERED_LANGUAGES_PATH)
+    stale_keys = [
+        key for key, entry in data.items() if now - entry["last_updated"] > max_age_seconds
+    ]
+    for key in stale_keys:
+        del data[key]
+    if stale_keys:
+        storage.write_json(DELIVERED_LANGUAGES_PATH, data)
+    return len(stale_keys)

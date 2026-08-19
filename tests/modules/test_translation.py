@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 
 from app import storage as core_storage
-from app.modules.translation import commands, handlers, logic, storage
+from app.modules.translation import commands, handlers, logic, scheduler, storage
 from app.modules.translation.lang_codes import ISO_TO_FLAG, ISO_TO_FLORES, color_for
 
 
@@ -17,6 +17,7 @@ def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "SERVER_LANGUAGE_PATH", tmp_path / "server_language.json")
     monkeypatch.setattr(storage, "DELIVERY_MODE_PATH", tmp_path / "delivery_mode.json")
     monkeypatch.setattr(storage, "EXCLUDED_CHANNELS_PATH", tmp_path / "excluded_channels.json")
+    monkeypatch.setattr(storage, "DELIVERED_LANGUAGES_PATH", tmp_path / "delivered_languages.json")
 
 
 def _make_member(guild_id, user_id, role_ids=()):
@@ -43,12 +44,15 @@ def _make_channel(members=(), hidden_from=(), channel_cls=discord.TextChannel):
     return channel
 
 
-def _make_message(author_id, content="hello", author_is_bot=False, channel=None):
+def _make_message(
+    author_id, content="hello", clean_content=None, author_is_bot=False, channel=None
+):
     message = MagicMock()
     message.author.id = author_id
     message.author.bot = author_is_bot
     message.author.display_name = "Author"
     message.content = content
+    message.clean_content = clean_content if clean_content is not None else content
     message.channel = channel if channel is not None else _make_channel()
     message.guild = message.channel.guild
     message.reply = AsyncMock()
@@ -66,6 +70,61 @@ def _make_reaction_payload(user_id, guild_id, channel_id, message_id, emoji):
     payload.message_id = message_id
     payload.emoji = discord.PartialEmoji(name=emoji)
     return payload
+
+
+# --- storage.is_language_delivered / mark_language_delivered / prune_stale_delivered_languages --
+
+
+def test_mark_and_is_language_delivered_round_trips(tmp_path, monkeypatch):
+    """A language just marked delivered for a message reads back as delivered."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.mark_language_delivered(42, "es", now=1000)
+
+    assert storage.is_language_delivered(42, "es") is True
+
+
+def test_is_language_delivered_false_for_an_unmarked_language(tmp_path, monkeypatch):
+    """A language never marked for this message reads back as not delivered."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.mark_language_delivered(42, "es", now=1000)
+
+    assert storage.is_language_delivered(42, "fr") is False
+
+
+def test_mark_language_delivered_keeps_languages_on_the_same_message_independent(
+    tmp_path, monkeypatch
+):
+    """Marking a second language on the same message doesn't drop the first."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.mark_language_delivered(42, "es", now=1000)
+    storage.mark_language_delivered(42, "fr", now=1001)
+
+    assert storage.is_language_delivered(42, "es") is True
+    assert storage.is_language_delivered(42, "fr") is True
+
+
+def test_mark_language_delivered_keeps_different_messages_independent(tmp_path, monkeypatch):
+    """The same language marked on a different message doesn't leak across messages."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.mark_language_delivered(42, "es", now=1000)
+
+    assert storage.is_language_delivered(99, "es") is False
+
+
+def test_prune_stale_delivered_languages_removes_only_entries_past_the_max_age(
+    tmp_path, monkeypatch
+):
+    """Old, untouched messages get pruned; recently-updated ones are left alone."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    now = 1_000_000
+    storage.mark_language_delivered(1, "es", now=now - 100)  # recent
+    storage.mark_language_delivered(2, "es", now=now - 10_000)  # stale
+
+    removed = storage.prune_stale_delivered_languages(now, max_age_seconds=1000)
+
+    assert removed == 1
+    assert storage.is_language_delivered(1, "es") is True
+    assert storage.is_language_delivered(2, "es") is False
 
 
 def test_commands_module_registers_every_translation_command():
@@ -681,6 +740,66 @@ def test_on_message_handles_reply_failure_gracefully(tmp_path, monkeypatch):
     asyncio.run(handlers.handle_message(None, message))  # must not raise
 
 
+def test_handle_message_translates_using_clean_content(tmp_path, monkeypatch):
+    """Same real bug, on the default reply-mode auto-translate path: real production
+    case was "Use your phone.  <@id> can recognize" -- the mention confused
+    LibreTranslate's detector into misreading the message as French, so only part
+    of it got translated. clean_content resolves the mention before detection.
+    """
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reply")
+    message = _make_message(100, content="<@123> hello", clean_content="@Name hello")
+    message.guild.id = 1
+    translate_mock = AsyncMock(return_value=("hola", "en"))
+    monkeypatch.setattr(logic.translator, "translate", translate_mock)
+
+    asyncio.run(handlers.handle_message(None, message))
+
+    translate_mock.assert_awaited_once_with("@Name hello", logic.DEFAULT_SERVER_LANGUAGE)
+
+
+def test_translate_message_rejects_empty_message():
+    """Nothing to translate in an empty message -- reported immediately, no defer."""
+    interaction = MagicMock()
+    interaction.response.send_message = AsyncMock()
+    message = _make_message(100, content="")
+
+    asyncio.run(commands.translate_message.callback(interaction, message))
+
+    interaction.response.send_message.assert_awaited_once()
+    assert "Nothing to translate" in interaction.response.send_message.call_args.args[0]
+
+
+def test_translate_message_happy_path(monkeypatch):
+    """Defers, translates, and follows up ephemerally with the result."""
+    interaction = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    monkeypatch.setattr(commands.translator, "translate", AsyncMock(return_value=("hola", "en")))
+    message = _make_message(100, content="hello")
+
+    asyncio.run(commands.translate_message.callback(interaction, message))
+
+    interaction.response.defer.assert_awaited_once_with(ephemeral=True)
+    interaction.followup.send.assert_awaited_once_with("**en → en**\nhola", ephemeral=True)
+
+
+def test_translate_message_uses_clean_content(monkeypatch):
+    """Same real bug as the other translation paths: a raw mention must not reach
+    the translator, clean_content should be sent instead.
+    """
+    interaction = MagicMock()
+    interaction.response.defer = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    translate_mock = AsyncMock(return_value=("hola", "en"))
+    monkeypatch.setattr(commands.translator, "translate", translate_mock)
+    message = _make_message(100, content="<@123> hello", clean_content="@Name hello")
+
+    asyncio.run(commands.translate_message.callback(interaction, message))
+
+    translate_mock.assert_awaited_once_with("@Name hello", "en")
+
+
 def test_retry_translation_rejects_empty_message(tmp_path, monkeypatch):
     """An admin can't retry a message with no content."""
     _use_tmp_store(tmp_path, monkeypatch)
@@ -900,6 +1019,81 @@ def test_deliver_as_reactions_continues_after_one_reaction_fails(monkeypatch):
     assert status == "Added 1 flag reaction(s)."
 
 
+def test_deliver_as_reactions_detects_language_from_clean_content(monkeypatch):
+    """Real bug: a raw Discord mention (<@id>) in the message confused LibreTranslate's
+    detector into misidentifying the language -- clean_content resolves it to
+    readable text first (<@id> -> @Name) instead of feeding raw markup to detection.
+    """
+    message = _make_message(100, content="<@123> hello", clean_content="@Name hello")
+    detect_mock = AsyncMock(return_value="en")
+    monkeypatch.setattr(logic.translator, "detect_language", detect_mock)
+
+    asyncio.run(logic._deliver_as_reactions(message, {"es"}))
+
+    detect_mock.assert_awaited_once_with("@Name hello")
+
+
+# --- logic._translate_single_language: not repeating an already-delivered language ---------
+
+
+def test_translate_single_language_skips_when_already_delivered(tmp_path, monkeypatch):
+    """A language already delivered for this message doesn't get re-translated or re-sent."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    message = _make_message(100, content="hello")
+    message.id = 42
+    storage.mark_language_delivered(42, "es", now=1000)
+    translate_mock = AsyncMock()
+    monkeypatch.setattr(logic.translator, "translate", translate_mock)
+
+    asyncio.run(logic._translate_single_language(message, "es"))
+
+    translate_mock.assert_not_awaited()
+    message.reply.assert_not_awaited()
+
+
+def test_translate_single_language_marks_delivered_after_a_successful_send(tmp_path, monkeypatch):
+    """The happy path: translates, replies, and the language is now tracked as delivered."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    message = _make_message(100, content="hello")
+    message.id = 42
+    monkeypatch.setattr(logic.translator, "translate", AsyncMock(return_value=("hola", "en")))
+
+    asyncio.run(logic._translate_single_language(message, "es"))
+
+    message.reply.assert_awaited_once()
+    assert storage.is_language_delivered(42, "es") is True
+
+
+def test_translate_single_language_leaves_a_different_language_unaffected(tmp_path, monkeypatch):
+    """Delivering one language on a message doesn't block a different one on the same message."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    message = _make_message(100, content="hello")
+    message.id = 42
+    storage.mark_language_delivered(42, "es", now=1000)
+    monkeypatch.setattr(logic.translator, "translate", AsyncMock(return_value=("bonjour", "en")))
+
+    asyncio.run(logic._translate_single_language(message, "fr"))
+
+    message.reply.assert_awaited_once()
+    assert storage.is_language_delivered(42, "fr") is True
+
+
+def test_translate_single_language_does_not_mark_delivered_when_the_reply_fails(
+    tmp_path, monkeypatch
+):
+    """A failed send (e.g. permissions) leaves the language retryable, not permanently skipped."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    message = _make_message(100, content="hello")
+    message.id = 42
+    response = MagicMock(status=403, reason="Forbidden")
+    message.reply = AsyncMock(side_effect=discord.Forbidden(response, "no perms"))
+    monkeypatch.setattr(logic.translator, "translate", AsyncMock(return_value=("hola", "en")))
+
+    asyncio.run(logic._translate_single_language(message, "es"))  # must not raise
+
+    assert storage.is_language_delivered(42, "es") is False
+
+
 def test_on_message_reactions_mode_adds_flags_without_translating_upfront(tmp_path, monkeypatch):
     """/setbehavior reactions: flags appear immediately, nothing is translated until someone reacts."""
     _use_tmp_store(tmp_path, monkeypatch)
@@ -1033,6 +1227,27 @@ def test_handle_reaction_add_translates_and_replies_on_a_recognized_flag(tmp_pat
     assert sent_embeds[0].description == "hola"
 
 
+def test_handle_reaction_add_translates_using_clean_content(tmp_path, monkeypatch):
+    """Same real bug, on the on-demand flag-click path: the raw mention must not
+    reach the translator, clean_content (readable @Name) should be sent instead.
+    """
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.set_delivery_mode(1, "reactions")
+    message = _make_message(100, content="<@123> hello", clean_content="@Name hello")
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.fetch_message = AsyncMock(return_value=message)
+    client = MagicMock(get_channel=MagicMock(return_value=channel))
+    translate_mock = AsyncMock(return_value=("hola", "en"))
+    monkeypatch.setattr(logic.translator, "translate", translate_mock)
+    payload = _make_reaction_payload(
+        user_id=100, guild_id=1, channel_id=10, message_id=20, emoji="🇪🇸"
+    )
+
+    asyncio.run(handlers.handle_reaction_add(client, payload))
+
+    translate_mock.assert_awaited_once_with("@Name hello", "es")
+
+
 def test_handle_reaction_add_handles_a_deleted_message_gracefully(tmp_path, monkeypatch):
     """If the reacted-on message was deleted before the fetch, this must not raise."""
     _use_tmp_store(tmp_path, monkeypatch)
@@ -1066,3 +1281,32 @@ def test_handle_reaction_add_falls_back_to_fetch_channel_when_not_cached(tmp_pat
     asyncio.run(handlers.handle_reaction_add(client, payload))
 
     message.reply.assert_awaited_once()
+
+
+# --- scheduler._run_cleanup -----------------------------------------------------------------
+
+
+def test_run_cleanup_removes_only_stale_entries(tmp_path, monkeypatch):
+    """Entries past the TTL are pruned; recently-touched ones are left in place."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    now = 1_000_000
+    ttl_seconds = logic.DELIVERED_LANGUAGES_TTL_DAYS * 86400
+    storage.mark_language_delivered(1, "es", now=now - 100)  # recent
+    storage.mark_language_delivered(2, "es", now=now - ttl_seconds - 100)  # stale
+
+    removed = asyncio.run(scheduler._run_cleanup(now))
+
+    assert removed == 1
+    assert storage.is_language_delivered(1, "es") is True
+    assert storage.is_language_delivered(2, "es") is False
+
+
+def test_run_cleanup_returns_zero_when_nothing_is_stale(tmp_path, monkeypatch):
+    """A quiet run with nothing to prune reports zero, not an error."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    now = 1_000_000
+    storage.mark_language_delivered(1, "es", now=now - 100)
+
+    removed = asyncio.run(scheduler._run_cleanup(now))
+
+    assert removed == 0

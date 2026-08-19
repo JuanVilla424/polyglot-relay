@@ -377,7 +377,7 @@ async def translate_message(interaction: discord.Interaction, message: discord.M
     target = target or "en"
 
     try:
-        translated, detected = await translator.translate(message.content, target)
+        translated, detected = await translator.translate(message.clean_content, target)
     except translator.UnsupportedLanguageError:
         await interaction.followup.send(
             "That message's language isn't supported for translation.", ephemeral=True

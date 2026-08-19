@@ -11,6 +11,7 @@ from app.modules import MODULES
 from app.modules.activity.scheduler import activity_digest_loop
 from app.modules.events.scheduler import reminder_loop
 from app.modules.events.views import EventView
+from app.modules.translation.scheduler import cleanup_loop
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -72,6 +73,8 @@ async def on_ready():
         reminder_loop.start(client)
     if not activity_digest_loop.is_running():
         activity_digest_loop.start(client)
+    if not cleanup_loop.is_running():
+        cleanup_loop.start()
     await _announce_deploy_if_new_sha()
     logger.info("logged in as %s", client.user)
 
