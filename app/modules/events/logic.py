@@ -108,6 +108,9 @@ async def create_scheduled_event(
         "end_time": end_time,
         "entity_type": discord.EntityType.external,
         "location": EVENT_LOCATION,
+        # Discord's API rejects the request without this -- guild_only is the
+        # only value it currently accepts, but it's still mandatory to send.
+        "privacy_level": discord.PrivacyLevel.guild_only,
     }
     # discord.py tries to base64-encode `image` unconditionally, even when
     # it's None, and crashes -- only pass it at all when there's a real image.

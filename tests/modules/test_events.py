@@ -186,6 +186,7 @@ def test_create_scheduled_event_calls_the_discord_api_with_external_entity_type(
     assert kwargs["name"] == "Rally Point"
     assert kwargs["entity_type"] == discord.EntityType.external
     assert kwargs["location"] == logic.EVENT_LOCATION
+    assert kwargs["privacy_level"] == discord.PrivacyLevel.guild_only
     assert kwargs["image"] == b"png-bytes"
     assert kwargs["end_time"] - kwargs["start_time"] == dt.timedelta(minutes=90)
 
