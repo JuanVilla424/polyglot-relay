@@ -9,8 +9,14 @@ if [ -n "$(git status --porcelain)" ]; then
     exit 1
 fi
 
-git log --format="%H %s" -50 > deploy_commit_log.txt
-git rev-parse HEAD > deploy_sha.txt
+SERVICE="${1:-bot}"
 
-docker compose build bot
-docker compose up -d bot
+# Only "bot" reads deploy_commit_log.txt/deploy_sha.txt (the deploy-announcement
+# feature) -- libretranslate/nllb don't need them, so skip generating them there.
+if [ "$SERVICE" = "bot" ]; then
+    git log --format="%H %s" -50 > deploy_commit_log.txt
+    git rev-parse HEAD > deploy_sha.txt
+fi
+
+docker compose build "$SERVICE"
+docker compose up -d "$SERVICE"

@@ -146,7 +146,7 @@ This starts three services, none exposed outside the internal Docker network: `l
 
 If you're upgrading from an older deploy that used a `./data` bind mount, migrate the existing JSON files into the named volume before recreating the container: `docker run --rm -v ./data:/src:ro -v polyglot-relay_polyglot-relay-data:/dst alpine sh -c "cp /src/*.json /dst/ && chown -R 1000:1000 /dst"`.
 
-After the first launch, redeploy the bot with `./deploy.sh` instead of a plain `docker compose build`/`up`. It refuses to run if there are uncommitted changes, then bakes the current git commit and a short commit log into the image (`deploy_sha.txt`/`deploy_commit_log.txt`) — the bot reads those on startup to post what changed to `LOG_CHANNEL_ID` (set up above), keyed on the actual deployed commit rather than a version bump.
+After the first launch, redeploy with `./deploy.sh [service]` instead of a plain `docker compose build`/`up` (`service` defaults to `bot`; use `./deploy.sh nllb` or `./deploy.sh libretranslate` for the other two). It refuses to run if there are uncommitted changes. For `bot` specifically, it also bakes the current git commit and a short commit log into the image (`deploy_sha.txt`/`deploy_commit_log.txt`) — the bot reads those on startup to post what changed to `LOG_CHANNEL_ID` (set up above), keyed on the actual deployed commit rather than a version bump.
 
 Language coverage for translation is limited to the languages mapped in `app/modules/translation/lang_codes.py` (curated common languages, not the full FLORES-200/200-language set) — `/setlanguage` with an unmapped code fails with a clear error instead of mistranslating.
 
