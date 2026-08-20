@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-COPY pyproject.toml ./
+COPY pyproject.toml CHANGELOG.md ./
 
 RUN pip install --no-cache-dir poetry==2.4.1 \
     && poetry config virtualenvs.create false \
