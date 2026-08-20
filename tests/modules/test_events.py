@@ -336,10 +336,14 @@ def test_require_enabled_passes_when_module_enabled(tmp_path, monkeypatch):
 
 
 def test_build_announcement_text_includes_title_and_native_timestamp():
-    """The immediate announcement pings everyone and shows a native Discord timestamp."""
+    """The immediate announcement is informational, not urgent -- no @everyone ping.
+
+    Only the reminder (build_reminder_text), sent right before the event
+    starts, is worth interrupting everyone for.
+    """
     text = logic.build_announcement_text("Strongest Lord", 9_999_999_999)
 
-    assert "@everyone" in text
+    assert "@everyone" not in text
     assert "Strongest Lord" in text
     assert "<t:9999999999:F>" in text
     assert "<t:9999999999:R>" in text
@@ -619,9 +623,8 @@ def test_announceevent_posts_to_the_announcements_channel_and_saves(tmp_path, mo
 
     channel.send.assert_awaited_once()
     sent_text = channel.send.call_args.args[0]
-    assert "@everyone" in sent_text
+    assert "@everyone" not in sent_text
     assert "Strongest Lord" in sent_text
-    assert channel.send.call_args.kwargs["allowed_mentions"].everyone is True
     saved = storage.get_announcement(777)
     assert saved["title"] == "Strongest Lord"
     assert saved["discord_event_id"] == 888

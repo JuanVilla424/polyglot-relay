@@ -186,8 +186,12 @@ async def send_to_announcements_channel(
 
 
 def build_announcement_text(title: str, timestamp: int) -> str:
-    """The initial, immediate announcement text for a real-world game event."""
-    return f"@everyone 📅 **{title}** — <t:{timestamp}:F> (<t:{timestamp}:R>)"
+    """The initial, immediate announcement text for a real-world game event.
+
+    Informational, not urgent -- no @everyone here. Only the reminder
+    (build_reminder_text), sent right before the event starts, pings everyone.
+    """
+    return f"📅 **{title}** — <t:{timestamp}:F> (<t:{timestamp}:R>)"
 
 
 def build_reminder_text(title: str, timestamp: int) -> str:
