@@ -196,7 +196,7 @@ cancel_event.error(_admin_command_error)
     time="Time, in HH:MM (24h)",
     utc_offset="UTC offset for that time, e.g. -5, 0, +2",
     reminder_minutes_before="Post a reminder this many minutes before -- default 30",
-    duration_minutes="How long the event runs, in minutes -- default 60",
+    duration_minutes="How long the event runs, in minutes -- default 60, up to 14 days (20160)",
 )
 @require_enabled("events")
 @app_commands.default_permissions(manage_guild=True)
@@ -210,7 +210,7 @@ async def announceevent(  # pylint: disable=too-many-arguments,too-many-position
     reminder_minutes_before: app_commands.Range[
         int, 1, 1440
     ] = DEFAULT_ANNOUNCEMENT_REMINDER_MINUTES,
-    duration_minutes: app_commands.Range[int, 1, 1440] = DEFAULT_EVENT_DURATION_MINUTES,
+    duration_minutes: app_commands.Range[int, 1, 20160] = DEFAULT_EVENT_DURATION_MINUTES,
 ):
     """Post an @everyone announcement now, and a single reminder before it starts.
 

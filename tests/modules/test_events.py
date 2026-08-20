@@ -628,6 +628,20 @@ def test_announceevent_posts_to_the_announcements_channel_and_saves(tmp_path, mo
     interaction.response.send_message.assert_awaited_once()
 
 
+def test_announceevent_duration_minutes_allows_multi_day_events():
+    """Real case: Strongest Lord runs ~6 days -- must not be capped at 24h like createvent.
+
+    Range bounds are enforced by Discord itself from the command's parameter
+    schema, not from calling .callback() directly (that bypasses them
+    entirely) -- so this checks the actual configured max_value.
+    """
+    duration_param = next(
+        p for p in commands.announceevent.parameters if p.name == "duration_minutes"
+    )
+
+    assert duration_param.max_value >= 6 * 24 * 60
+
+
 # --- logic.cancel_event_and_notify / _announce_cancellation --------------------------
 
 
