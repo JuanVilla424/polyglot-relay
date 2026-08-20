@@ -149,9 +149,18 @@ def _protect_emoji(text: str) -> tuple[str, list[str]]:
 
 
 def _restore_emoji(text: str, found: list[str]) -> str:
-    """Put each emoji back where its placeholder from _protect_emoji ended up."""
+    """Put each emoji back where its placeholder from _protect_emoji ended up.
+
+    Case-insensitive: a placeholder that lands at the start of a sentence is
+    treated as a word by the model and comes back capitalized (xEMOJIx0x ->
+    XEMOJIx0x), which an exact str.replace would leave in the output.
+    """
     for i, emoji in enumerate(found):
-        text = text.replace(f"{_EMOJI_PLACEHOLDER_PREFIX}{i}{_EMOJI_PLACEHOLDER_SUFFIX}", emoji)
+        placeholder = re.compile(
+            re.escape(f"{_EMOJI_PLACEHOLDER_PREFIX}{i}{_EMOJI_PLACEHOLDER_SUFFIX}"),
+            re.IGNORECASE,
+        )
+        text = placeholder.sub(lambda _match, restored=emoji: restored, text)
     return text
 
 

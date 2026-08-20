@@ -207,6 +207,32 @@ def test_translate_protects_leading_emoji():
     fake_tokenizer.encode.assert_called_once_with("xEMOJIx0x hello world")
 
 
+def test_translate_restores_an_emoji_placeholder_the_model_capitalized():
+    """Real bug (Beastmaster guide -> Romanian): a placeholder that lands at the
+    start of a sentence gets treated as a word and capitalized by the model
+    (xEMOJIx0x -> XEMOJIx0x), so a case-sensitive restore left the literal
+    placeholder in the published translation instead of the emoji.
+    """
+    fake_result = MagicMock()
+    fake_result.hypotheses = [["ron_Latn", "convocarea"]]
+    fake_translator = MagicMock()
+    fake_translator.translate_batch.return_value = [fake_result]
+
+    fake_tokenizer = MagicMock()
+    fake_tokenizer.decode.return_value = "XEMOJIx0x Beastmaster - convocarea"
+
+    with (
+        patch.object(server, "_translator", fake_translator),
+        patch.object(server, "_tokenizers", {"eng_Latn": fake_tokenizer}),
+    ):
+        response = client.post(
+            "/translate",
+            json={"q": "🐲 Beastmaster — summoning", "source": "eng_Latn", "target": "ron_Latn"},
+        )
+
+    assert response.json() == {"translatedText": "🐲 Beastmaster - convocarea"}
+
+
 def test_translate_protects_leading_emoji_after_a_zero_width_space():
     """Real bug: a zero-width space (U+200B) before the emoji -- common residue
     from copy-pasting rich text -- broke the anchored emoji regex entirely, so
