@@ -18,6 +18,10 @@ docker compose up -d "$SERVICE"
 # used to be the only one that could, since it relied on the bot detecting
 # its own restart; nllb/libretranslate never touched that code path at all).
 SHA="$(git rev-parse --short HEAD)"
-SUBJECT="$(git log -1 --format=%s)"
+# Skip past the automatic version-bump commit (always "🔖 Bump version: X → Y",
+# content-free) that commit_msg_version_bump adds after a [*_candidate]-tagged
+# commit, so the announcement shows what a human actually wrote. A plain fix
+# with no bump commit just gets its own subject straight from the top.
+SUBJECT="$(git log -5 --format=%s | grep -v '^🔖 Bump version:' | head -1)"
 docker exec polyglot-relay-bot python -u -m app.announce_deploy "$SERVICE" "$SHA" "$SUBJECT" \
     || echo "WARNING: could not post the deploy announcement to Discord" >&2
