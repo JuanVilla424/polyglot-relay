@@ -233,6 +233,78 @@ def test_translate_restores_an_emoji_placeholder_the_model_capitalized():
     assert response.json() == {"translatedText": "🐲 Beastmaster - convocarea"}
 
 
+def _translate_with_decode(source_text: str, decoded_text: str) -> tuple[dict, MagicMock]:
+    """Run /translate with the model mocked to return decoded_text; returns
+    (response json, fake_tokenizer) so callers can assert what got encoded."""
+    fake_result = MagicMock()
+    fake_result.hypotheses = [["spa_Latn", "x"]]
+    fake_translator = MagicMock()
+    fake_translator.translate_batch.return_value = [fake_result]
+
+    fake_tokenizer = MagicMock()
+    fake_tokenizer.decode.return_value = decoded_text
+
+    with (
+        patch.object(server, "_translator", fake_translator),
+        patch.object(server, "_tokenizers", {"eng_Latn": fake_tokenizer}),
+    ):
+        response = client.post(
+            "/translate", json={"q": source_text, "source": "eng_Latn", "target": "spa_Latn"}
+        )
+    return response.json(), fake_tokenizer
+
+
+def test_translate_protects_a_glossary_term():
+    """Real bug (Beastmaster guide -> Romanian): in-game terms came back
+    translated or corrupted ("Beastmaster" -> "Maestrul Bestiei"); glossary
+    terms must reach the model as placeholders and come back verbatim.
+    """
+    result, fake_tokenizer = _translate_with_decode("the Beastmaster leads", "el xEMOJIx0x lidera")
+
+    assert result == {"translatedText": "el Beastmaster lidera"}
+    fake_tokenizer.encode.assert_called_once_with("the xEMOJIx0x leads")
+
+
+def test_translate_protects_a_multi_word_term_as_one_unit():
+    """ "Behemoth Points" is one term -- longest-first matching, so it must not
+    decompose into a protected "Behemoth" plus a translatable "Points"
+    (the Romanian incident dropped "Points" entirely).
+    """
+    result, fake_tokenizer = _translate_with_decode(
+        "spend Behemoth Points wisely", "gasta xEMOJIx0x sabiamente"
+    )
+
+    assert result == {"translatedText": "gasta Behemoth Points sabiamente"}
+    fake_tokenizer.encode.assert_called_once_with("spend xEMOJIx0x wisely")
+
+
+def test_translate_keeps_the_authors_casing_on_a_protected_term():
+    """Matching is case-insensitive but restoring gives back exactly what the
+    author wrote -- a lowercase "behemoths" stays lowercase."""
+    result, _ = _translate_with_decode("two behemoths fell", "dos xEMOJIx0x cayeron")
+
+    assert result == {"translatedText": "dos behemoths cayeron"}
+
+
+def test_translate_leaves_common_words_alone():
+    """Only the exact all-caps UI label is protected -- lowercase "fighting" in a
+    normal sentence must still reach the model translatable."""
+    _, fake_tokenizer = _translate_with_decode("we are fighting tonight", "peleamos hoy")
+
+    fake_tokenizer.encode.assert_called_once_with("we are fighting tonight")
+
+
+def test_translate_protects_an_emoji_and_a_term_in_the_same_sentence():
+    """Emoji and glossary terms share one placeholder namespace -- interleaved
+    indices must each restore to their own original."""
+    result, fake_tokenizer = _translate_with_decode(
+        "⚔️ the Beastmaster strikes", "xEMOJIx0x el xEMOJIx1x golpea"
+    )
+
+    assert result == {"translatedText": "⚔️ el Beastmaster golpea"}
+    fake_tokenizer.encode.assert_called_once_with("xEMOJIx0x the xEMOJIx1x strikes")
+
+
 def test_translate_protects_leading_emoji_after_a_zero_width_space():
     """Real bug: a zero-width space (U+200B) before the emoji -- common residue
     from copy-pasting rich text -- broke the anchored emoji regex entirely, so

@@ -40,8 +40,61 @@ _EMOJI_RE = re.compile(
     f"[{_INVISIBLE_PREFIX_CHARS}]*"
     "[\U0001f1e6-\U0001f1ff\U00002600-\U000027bf\U0001f300-\U0001faff️]+"
 )
-_EMOJI_PLACEHOLDER_PREFIX = "xEMOJIx"
-_EMOJI_PLACEHOLDER_SUFFIX = "x"
+# One placeholder namespace for everything protected (emoji AND glossary terms).
+# The literal "xEMOJIx" is historical but deliberately kept: it's an opaque
+# token empirically proven to pass through the model untouched -- renaming it
+# would reopen that question for no gain.
+_PLACEHOLDER_PREFIX = "xEMOJIx"
+_PLACEHOLDER_SUFFIX = "x"
+
+# In-game glossary: proper nouns and UI labels the model must never translate
+# (observed corrupted otherwise: "Beastmaster" -> "Maestrul Bestiei", "Roots of
+# War" -> "Rots of War", "Behemoth Points" dropped entirely). Matched
+# case-insensitively with word boundaries; the author's exact casing is what
+# gets restored. Bare "Giant" is deliberately absent -- too common a word to
+# claim case-insensitively; "Giant Bear" covers the behemoth's full name.
+_PROTECTED_TERMS_ANY_CASE = (
+    "Behemoth Points",
+    "Behemoth Raids",
+    "Behemoth Raid",
+    "Roots of War",
+    "Battle Abyss",
+    "Battle Duration",
+    "Druid Hut",
+    "Giant Bear",
+    "Thunder Roc",
+    "Flame Dragon",
+    "Magma Daemon",
+    "Frost Dragon",
+    "Night Roc",
+    "Necrogiant",
+    "Direbear",
+    "Hydra",
+    "Beastmasters",
+    "Beastmaster",
+    "Behemoths",
+    "Behemoth",
+    "Strongholds",
+    "Stronghold",
+    "Lifestones",
+    "Lifestone",
+    "cooldowns",
+    "cooldown",
+)
+# All-caps UI labels, matched case-SENSITIVELY: their lowercase forms are
+# ordinary words ("we are fighting tonight") that must stay translatable.
+_PROTECTED_TERMS_EXACT_CASE = ("SUMMON", "FIGHTING", "DONATE")
+
+
+def _terms_regex(terms: tuple[str, ...], flags: int = 0) -> re.Pattern:
+    """Alternation over terms, longest first so "Behemoth Points" wins over
+    "Behemoth" regardless of how the source tuple is ordered."""
+    ordered = sorted(terms, key=len, reverse=True)
+    return re.compile(r"\b(?:" + "|".join(re.escape(term) for term in ordered) + r")\b", flags)
+
+
+_TERMS_ANY_CASE_RE = _terms_regex(_PROTECTED_TERMS_ANY_CASE, re.IGNORECASE)
+_TERMS_EXACT_CASE_RE = _terms_regex(_PROTECTED_TERMS_EXACT_CASE)
 
 # NLLB also stops early mid-sentence when a single line packs more than one
 # sentence together (very common in prose without a line break per sentence) —
@@ -130,37 +183,42 @@ def _split_into_sentences(text: str) -> list[str]:
     return _SENTENCE_RE.split(text)
 
 
-def _protect_emoji(text: str) -> tuple[str, list[str]]:
-    """Replace every emoji anywhere in text with a numbered placeholder.
+def _protect_verbatim(text: str) -> tuple[str, list[str]]:
+    """Replace everything that must survive translation verbatim -- emoji and
+    in-game glossary terms -- with numbered placeholders.
 
     Plain ASCII survives translation intact (confirmed empirically across
-    several target languages), unlike the emoji itself, which the model
-    doesn't have a token for and turns into a literal <unk>. Returns the
-    placeholder-substituted text plus the emoji found, in order, so they can
-    be put back after decoding.
+    several target languages); emoji become literal <unk> tokens and glossary
+    terms come back translated or corrupted. Returns the placeholder-substituted
+    text plus the originals found, in order, so they can be put back after
+    decoding. Placeholders already inserted by an earlier pass are inert to the
+    later ones: they contain no emoji and match no glossary term.
     """
     found: list[str] = []
 
     def _replace(match: re.Match) -> str:
         found.append(match.group(0))
-        return f"{_EMOJI_PLACEHOLDER_PREFIX}{len(found) - 1}{_EMOJI_PLACEHOLDER_SUFFIX}"
+        return f"{_PLACEHOLDER_PREFIX}{len(found) - 1}{_PLACEHOLDER_SUFFIX}"
 
-    return _EMOJI_RE.sub(_replace, text), found
+    text = _EMOJI_RE.sub(_replace, text)
+    text = _TERMS_ANY_CASE_RE.sub(_replace, text)
+    text = _TERMS_EXACT_CASE_RE.sub(_replace, text)
+    return text, found
 
 
-def _restore_emoji(text: str, found: list[str]) -> str:
-    """Put each emoji back where its placeholder from _protect_emoji ended up.
+def _restore_verbatim(text: str, found: list[str]) -> str:
+    """Put each protected original back where its placeholder ended up.
 
     Case-insensitive: a placeholder that lands at the start of a sentence is
     treated as a word by the model and comes back capitalized (xEMOJIx0x ->
     XEMOJIx0x), which an exact str.replace would leave in the output.
     """
-    for i, emoji in enumerate(found):
+    for i, original in enumerate(found):
         placeholder = re.compile(
-            re.escape(f"{_EMOJI_PLACEHOLDER_PREFIX}{i}{_EMOJI_PLACEHOLDER_SUFFIX}"),
+            re.escape(f"{_PLACEHOLDER_PREFIX}{i}{_PLACEHOLDER_SUFFIX}"),
             re.IGNORECASE,
         )
-        text = placeholder.sub(lambda _match, restored=emoji: restored, text)
+        text = placeholder.sub(lambda _match, restored=original: restored, text)
     return text
 
 
@@ -185,16 +243,16 @@ def _prepare_lines(text: str) -> tuple[dict[int, str], dict[int, list[str]]]:
 
 
 def _build_segments(sentences_by_line: dict[int, list[str]]) -> list[tuple[int, str, list[str]]]:
-    """Normalize punctuation and protect emoji in every sentence, flattened for batching.
-
-    Each entry is (line_index, text ready for the tokenizer, emoji found in it).
+    """Normalize punctuation and protect emoji/glossary terms per sentence, flattened
+    for batching. Each entry is (line_index, text ready for the tokenizer, originals
+    protected in it).
     """
     segments = []
     for i, sentences in sentences_by_line.items():
         for sentence in sentences:
             normalized = sentence.translate(_PUNCTUATION_NORMALIZATION)
-            protected, found_emoji = _protect_emoji(normalized)
-            segments.append((i, protected, found_emoji))
+            protected, found = _protect_verbatim(normalized)
+            segments.append((i, protected, found))
     return segments
 
 
@@ -203,12 +261,13 @@ def _decode_translations(
     flat_segments: list[tuple[int, str, list[str]]],
     results: list,
 ) -> dict[int, list[str]]:
-    """Decode each translated segment and restore its emoji, grouped back by line."""
+    """Decode each translated segment and restore its protected originals, grouped
+    back by line."""
     translated_by_line: dict[int, list[str]] = defaultdict(list)
-    for (line_index, _, found_emoji), result in zip(flat_segments, results):
+    for (line_index, _, found), result in zip(flat_segments, results):
         target_tokens = result.hypotheses[0][1:]
         decoded = tokenizer.decode(tokenizer.convert_tokens_to_ids(target_tokens))
-        translated_by_line[line_index].append(_restore_emoji(decoded, found_emoji))
+        translated_by_line[line_index].append(_restore_verbatim(decoded, found))
     return translated_by_line
 
 
@@ -221,9 +280,10 @@ def translate(req: TranslateRequest) -> TranslateResponse:
     cap — and the same thing happens within a single line when it packs more than
     one sentence together. Translating line by line, and sentence by sentence
     within each line, keeps every call short enough for the model to actually
-    finish. Protecting a markdown heading marker per line, and any emoji anywhere
-    in each sentence, keeps them from being corrupted in the process, and
-    normalizing smart punctuation to ASCII avoids <unk> tokens for those too.
+    finish. Protecting a markdown heading marker per line, plus any emoji and
+    in-game glossary term anywhere in each sentence, keeps them from being
+    corrupted in the process, and normalizing smart punctuation to ASCII avoids
+    <unk> tokens for those too.
     """
     translator = _get_translator()
     tokenizer = _get_tokenizer(req.source)
