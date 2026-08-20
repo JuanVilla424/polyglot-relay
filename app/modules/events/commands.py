@@ -10,8 +10,10 @@ from app.modules.events.logic import (
     DEFAULT_ANNOUNCEMENT_REMINDER_MINUTES,
     DEFAULT_EVENT_DURATION_MINUTES,
     REMINDER_OFFSETS_MINUTES,
+    RESCHEDULE_WINDOW_SECONDS,
     RSVP_EMOJIS,
     build_announcement_text,
+    build_reschedule_text,
     cancel_event_and_notify,
     create_scheduled_event,
     make_event_embed,
@@ -39,6 +41,24 @@ async def _admin_command_error(
         return
     logger.exception("events command failed", exc_info=error)
     await interaction.response.send_message("Something went wrong.", ephemeral=True)
+
+
+async def _announce_event_schedule(
+    interaction: discord.Interaction, title: str, event_timestamp: int, sent: discord.Message
+) -> None:
+    """Best-effort schedule line in the announcements channel, with a jump link to
+    the RSVP embed. Re-creating a just-cancelled title reads "was rescheduled"
+    instead of looking like a brand-new event. Skipped when the event was created
+    in the announcements channel itself -- no point announcing it twice there.
+    """
+    if interaction.channel_id == ANNOUNCEMENTS_CHANNEL_ID:
+        return
+    now = int(discord.utils.utcnow().timestamp())
+    if storage.pop_recent_cancellation(interaction.guild_id, title, now, RESCHEDULE_WINDOW_SECONDS):
+        text = build_reschedule_text(title, event_timestamp)
+    else:
+        text = build_announcement_text(title, event_timestamp)
+    await send_to_announcements_channel(interaction.client, f"{text}\n{sent.jump_url}")
 
 
 @app_commands.command(
@@ -125,6 +145,8 @@ async def createvent(  # pylint: disable=too-many-arguments,too-many-positional-
             await sent.add_reaction(emoji)
         except discord.HTTPException:
             logger.warning("could not add RSVP reaction %s to event %s", emoji, sent.id)
+
+    await _announce_event_schedule(interaction, title, event_timestamp, sent)
 
     logger.info(
         "event %s %r created by %s in guild %s, scheduled for %s",

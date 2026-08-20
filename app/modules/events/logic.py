@@ -27,6 +27,11 @@ EVENT_LOCATION = "In-game"
 DEFAULT_EVENT_DURATION_MINUTES = 60
 DEFAULT_ANNOUNCEMENT_REMINDER_MINUTES = 30
 
+# Re-creating a title cancelled within this window announces as "was rescheduled"
+# instead of a brand-new event. 48h covers cancelling today and re-scheduling
+# tomorrow, without a genuinely new event months later matching a stale title.
+RESCHEDULE_WINDOW_SECONDS = 48 * 3600
+
 
 def parse_event_timestamp(date: str, time: str, utc_offset: str) -> int:
     """Parse date/time/utc_offset into a unix timestamp.
@@ -146,6 +151,12 @@ async def cancel_event_and_notify(
         return "That message isn't a tracked event."
 
     storage.delete_event(message.id)
+    storage.record_cancellation(
+        event["guild_id"],
+        event["title"],
+        int(datetime.now(timezone.utc).timestamp()),
+        RESCHEDULE_WINDOW_SECONDS,
+    )
     if event.get("discord_event_id"):
         await cancel_scheduled_event(message.guild, event["discord_event_id"])
     try:
@@ -163,8 +174,9 @@ async def cancel_event_and_notify(
 
 
 async def _announce_cancellation(client: discord.Client, event: dict) -> None:
-    """Best-effort @everyone ping in the announcements channel, if one is configured."""
-    await send_to_announcements_channel(client, f"@everyone 🚫 **{event['title']}** was cancelled.")
+    """Best-effort informational post in the announcements channel, if one is
+    configured -- no @everyone: only reminders are urgent enough to ping everyone."""
+    await send_to_announcements_channel(client, f"🚫 **{event['title']}** was cancelled.")
 
 
 async def send_to_announcements_channel(
@@ -197,3 +209,9 @@ def build_announcement_text(title: str, timestamp: int) -> str:
 def build_reminder_text(title: str, timestamp: int) -> str:
     """The single reminder text posted reminder_minutes_before an announced event."""
     return f"@everyone ⏰ **{title}** starts <t:{timestamp}:R>!"
+
+
+def build_reschedule_text(title: str, timestamp: int) -> str:
+    """The announcement for an event re-created right after being cancelled --
+    same informational tone as build_announcement_text, no @everyone."""
+    return f"🔁 **{title}** was rescheduled — <t:{timestamp}:F> (<t:{timestamp}:R>)"

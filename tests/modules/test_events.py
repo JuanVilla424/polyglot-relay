@@ -18,6 +18,7 @@ def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(
         storage, "GAME_EVENT_ANNOUNCEMENTS_PATH", tmp_path / "game_event_announcements.json"
     )
+    monkeypatch.setattr(storage, "CANCELLED_EVENTS_PATH", tmp_path / "cancelled_events.json")
 
 
 def _make_event(guild_id=1, channel_id=10, timestamp=9_999_999_999, **overrides):
@@ -88,6 +89,54 @@ def test_all_announcements_returns_every_tracked_announcement(tmp_path, monkeypa
     storage.save_announcement(2, _make_announcement(title="B"))
 
     assert set(storage.all_announcements().keys()) == {"1", "2"}
+
+
+# --- storage.record_cancellation / pop_recent_cancellation ----------------------------
+
+
+def test_pop_recent_cancellation_matches_and_consumes_the_record(tmp_path, monkeypatch):
+    """A recorded cancellation matches once, then is consumed -- only the first
+    re-creation of that title announces as rescheduled."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.record_cancellation(1, "necrogiant capture", 1000, 100)
+
+    assert storage.pop_recent_cancellation(1, "necrogiant capture", 1050, 100) is True
+    assert storage.pop_recent_cancellation(1, "necrogiant capture", 1050, 100) is False
+
+
+def test_pop_recent_cancellation_ignores_expired_records(tmp_path, monkeypatch):
+    """A cancellation older than the window is not a reschedule -- it's a new event."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.record_cancellation(1, "Rally", 1000, 100)
+
+    assert storage.pop_recent_cancellation(1, "Rally", 1101, 100) is False
+
+
+def test_pop_recent_cancellation_normalizes_the_title(tmp_path, monkeypatch):
+    """Retyped titles still match: case and surrounding whitespace are ignored."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.record_cancellation(1, "necrogiant capture", 1000, 100)
+
+    assert storage.pop_recent_cancellation(1, "  Necrogiant CAPTURE ", 1050, 100) is True
+
+
+def test_pop_recent_cancellation_is_scoped_per_guild(tmp_path, monkeypatch):
+    """A cancellation in one server never marks another server's event as rescheduled."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.record_cancellation(1, "Rally", 1000, 100)
+
+    assert storage.pop_recent_cancellation(2, "Rally", 1050, 100) is False
+
+
+def test_record_cancellation_prunes_expired_records(tmp_path, monkeypatch):
+    """Old records don't pile up in the store forever -- each write prunes them."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.record_cancellation(1, "Old", 1000, 100)
+    storage.record_cancellation(1, "New", 2000, 100)
+
+    data = core_storage.read_json(storage.CANCELLED_EVENTS_PATH)
+    assert "old" not in data.get("1", {})
+    assert "new" in data.get("1", {})
 
 
 # --- logic.parse_event_timestamp -------------------------------------------------
@@ -358,6 +407,59 @@ def test_build_reminder_text_includes_title_and_native_timestamp():
     assert "<t:9999999999:R>" in text
 
 
+def test_build_reschedule_text_says_rescheduled_without_pinging_everyone():
+    """A reschedule is informational too -- the new date is shown, nobody gets pinged."""
+    text = logic.build_reschedule_text("necrogiant capture", 9_999_999_999)
+
+    assert "@everyone" not in text
+    assert "necrogiant capture" in text
+    assert "rescheduled" in text
+    assert "<t:9999999999:F>" in text
+    assert "<t:9999999999:R>" in text
+
+
+# --- logic.cancel_event_and_notify ----------------------------------------------------
+
+
+def test_cancel_event_and_notify_announces_without_pinging_everyone(tmp_path, monkeypatch):
+    """The cancellation notice stays informational -- only reminders ping @everyone."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.save_event(42, _make_event(title="Rally"))
+    sent_texts = []
+
+    async def _capture(_client, text):
+        sent_texts.append(text)
+        return MagicMock()
+
+    monkeypatch.setattr(logic, "send_to_announcements_channel", _capture)
+    monkeypatch.setattr(logic, "report_to_log_channel", AsyncMock())
+    message = MagicMock()
+    message.id = 42
+    message.reply = AsyncMock()
+
+    asyncio.run(logic.cancel_event_and_notify(MagicMock(), message, 555))
+
+    assert sent_texts == ["🚫 **Rally** was cancelled."]
+
+
+def test_cancel_event_and_notify_records_the_cancellation_for_reschedule_matching(
+    tmp_path, monkeypatch
+):
+    """Cancelling leaves a record so re-creating the same title announces as rescheduled."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    storage.save_event(42, _make_event(guild_id=7, title="Rally"))
+    monkeypatch.setattr(logic, "send_to_announcements_channel", AsyncMock())
+    monkeypatch.setattr(logic, "report_to_log_channel", AsyncMock())
+    message = MagicMock()
+    message.id = 42
+    message.reply = AsyncMock()
+
+    asyncio.run(logic.cancel_event_and_notify(MagicMock(), message, 555))
+
+    now = int(discord.utils.utcnow().timestamp())
+    assert storage.pop_recent_cancellation(7, "Rally", now, logic.RESCHEDULE_WINDOW_SECONDS)
+
+
 # --- logic.send_to_announcements_channel ----------------------------------------------
 
 
@@ -550,6 +652,93 @@ def test_cancel_event_reports_when_message_is_not_a_tracked_event(tmp_path, monk
     assert "isn't a tracked event" in interaction.response.send_message.call_args.args[0]
 
 
+# --- commands.createvent -> announcements channel --------------------------------------
+
+
+def _make_createvent_interaction():
+    interaction = MagicMock()
+    interaction.guild_id = 1
+    interaction.channel_id = 10
+    interaction.user.id = 555
+    interaction.response.send_message = AsyncMock()
+    interaction.guild.create_scheduled_event = AsyncMock(return_value=MagicMock(id=888))
+    sent_message = MagicMock()
+    sent_message.id = 777
+    sent_message.embeds = []
+    sent_message.jump_url = "https://discord.com/channels/1/10/777"
+    sent_message.add_reaction = AsyncMock()
+    interaction.original_response = AsyncMock(return_value=sent_message)
+    return interaction
+
+
+def _capture_announcements(monkeypatch):
+    sent_texts = []
+
+    async def _capture(_client, text):
+        sent_texts.append(text)
+        return MagicMock()
+
+    monkeypatch.setattr(commands, "send_to_announcements_channel", _capture)
+    return sent_texts
+
+
+def test_createvent_announces_the_schedule_to_the_announcements_channel(tmp_path, monkeypatch):
+    """Creating an event posts an informational line in announcements -- no @everyone,
+    with a jump link straight to the RSVP embed."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(commands, "ANNOUNCEMENTS_CHANNEL_ID", 999)
+    sent_texts = _capture_announcements(monkeypatch)
+    interaction = _make_createvent_interaction()
+
+    asyncio.run(
+        commands.createvent.callback(interaction, "Rally Point", "2099-01-01", "18:00", "0")
+    )
+
+    assert len(sent_texts) == 1
+    assert "Rally Point" in sent_texts[0]
+    assert "@everyone" not in sent_texts[0]
+    assert "rescheduled" not in sent_texts[0]
+    assert "https://discord.com/channels/1/10/777" in sent_texts[0]
+
+
+def test_createvent_announces_a_reschedule_when_the_same_title_was_just_cancelled(
+    tmp_path, monkeypatch
+):
+    """Cancel + re-create with the same title reads as a reschedule, not a new event,
+    and the cancellation record is consumed by the match."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(commands, "ANNOUNCEMENTS_CHANNEL_ID", 999)
+    sent_texts = _capture_announcements(monkeypatch)
+    now = int(discord.utils.utcnow().timestamp())
+    storage.record_cancellation(1, "Rally Point", now, logic.RESCHEDULE_WINDOW_SECONDS)
+    interaction = _make_createvent_interaction()
+
+    asyncio.run(
+        commands.createvent.callback(interaction, "Rally Point", "2099-01-01", "18:00", "0")
+    )
+
+    assert len(sent_texts) == 1
+    assert "was rescheduled" in sent_texts[0]
+    assert "@everyone" not in sent_texts[0]
+    assert not storage.pop_recent_cancellation(
+        1, "Rally Point", now, logic.RESCHEDULE_WINDOW_SECONDS
+    )
+
+
+def test_createvent_skips_the_announcement_inside_the_announcements_channel(tmp_path, monkeypatch):
+    """An event created in the announcements channel itself isn't announced twice."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(commands, "ANNOUNCEMENTS_CHANNEL_ID", 10)
+    sent_texts = _capture_announcements(monkeypatch)
+    interaction = _make_createvent_interaction()
+
+    asyncio.run(
+        commands.createvent.callback(interaction, "Rally Point", "2099-01-01", "18:00", "0")
+    )
+
+    assert not sent_texts
+
+
 # --- commands.announceevent -----------------------------------------------------------
 
 
@@ -722,8 +911,9 @@ def test_announce_cancellation_noop_when_unconfigured(monkeypatch):
     asyncio.run(logic._announce_cancellation(client, _make_event(title="Rally")))
 
 
-def test_announce_cancellation_pings_everyone_in_the_configured_channel(monkeypatch):
-    """A configured channel gets an @everyone ping naming the cancelled event."""
+def test_announce_cancellation_posts_to_the_configured_channel_without_everyone(monkeypatch):
+    """A configured channel gets an informational notice naming the cancelled event --
+    no @everyone: a cancellation isn't urgent enough to interrupt everyone."""
     monkeypatch.setattr(logic, "ANNOUNCEMENTS_CHANNEL_ID", 999)
     channel = MagicMock(spec=discord.TextChannel)
     channel.send = AsyncMock()
@@ -733,9 +923,8 @@ def test_announce_cancellation_pings_everyone_in_the_configured_channel(monkeypa
 
     channel.send.assert_awaited_once()
     sent_text = channel.send.call_args.args[0]
-    assert "@everyone" in sent_text
+    assert "@everyone" not in sent_text
     assert "Rally" in sent_text
-    assert channel.send.call_args.kwargs["allowed_mentions"].everyone is True
 
 
 def test_announce_cancellation_swallows_send_failures(monkeypatch):
