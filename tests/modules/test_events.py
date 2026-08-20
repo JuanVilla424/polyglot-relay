@@ -792,6 +792,9 @@ def test_announceevent_posts_to_the_announcements_channel_and_saves(tmp_path, mo
     """The full happy path: posted with @everyone, native event created, tracked in storage."""
     _use_tmp_store(tmp_path, monkeypatch)
     monkeypatch.setattr(commands, "ANNOUNCEMENTS_CHANNEL_ID", 999)
+    # send_to_announcements_channel reads logic's own global -- patch it too, or the
+    # test silently depends on the developer's real .env (green locally, red in CI).
+    monkeypatch.setattr(logic, "ANNOUNCEMENTS_CHANNEL_ID", 999)
     channel = MagicMock(spec=discord.TextChannel)
     sent_message = MagicMock()
     sent_message.id = 777
