@@ -24,17 +24,24 @@ _MAX_DECODING_LENGTH = 2048
 # translating and reattach them untouched afterwards.
 _HEADER_RE = re.compile(r"^(#{1,6}\s+)")
 # Zero-width space/joiner/BOM (U+200B/U+200C/U+200D/U+FEFF) commonly precede an
-# emoji as residue from copy-pasting rich text (e.g. from a notes app or wiki).
-# Optional at the start so they don't break the anchored emoji match below --
-# real bug: they did, the emoji was never stripped, and NLLB emitted a literal
-# <unk> for it since it isn't in the model's vocabulary.
+# emoji as residue from copy-pasting rich text (e.g. from a notes app or wiki) --
+# swallow them as part of the same match so they travel with their emoji instead
+# of being left behind to confuse the tokenizer on their own.
 _INVISIBLE_PREFIX_CHARS = "".join(
     chr(code_point) for code_point in (0x200B, 0x200C, 0x200D, 0xFEFF)
 )
+# Not anchored: an emoji anywhere in a sentence -- not just as a line prefix --
+# hits the tokenizer raw and comes back as a literal <unk> if it's not in NLLB's
+# vocabulary (true of most flags: they're regional-indicator pairs, a huge
+# combinatorial space the model never saw enough of in training). No trailing
+# \s* here (unlike a pure prefix-strip) -- consuming a real space in the middle
+# of a sentence would glue the placeholder to the next word.
 _EMOJI_RE = re.compile(
-    f"^[{_INVISIBLE_PREFIX_CHARS}]*"
-    "[\U0001f1e6-\U0001f1ff\U00002600-\U000027bf\U0001f300-\U0001faff️]+\\s*"
+    f"[{_INVISIBLE_PREFIX_CHARS}]*"
+    "[\U0001f1e6-\U0001f1ff\U00002600-\U000027bf\U0001f300-\U0001faff️]+"
 )
+_EMOJI_PLACEHOLDER_PREFIX = "xEMOJIx"
+_EMOJI_PLACEHOLDER_SUFFIX = "x"
 
 # NLLB also stops early mid-sentence when a single line packs more than one
 # sentence together (very common in prose without a line break per sentence) —
@@ -104,22 +111,16 @@ class TranslateResponse(BaseModel):
     translatedText: str
 
 
-def _split_protected_prefix(line: str) -> tuple[str, str]:
-    """Pull a markdown heading marker and/or leading emoji off a line.
+def _split_header_prefix(line: str) -> tuple[str, str]:
+    """Pull a markdown heading marker off a line.
 
     Returns (prefix, rest) — prefix is reattached untouched after translation,
     rest is what actually gets sent to the model.
     """
-    prefix = ""
     header_match = _HEADER_RE.match(line)
     if header_match:
-        prefix += header_match.group(0)
-        line = line[header_match.end() :]
-    emoji_match = _EMOJI_RE.match(line)
-    if emoji_match:
-        prefix += emoji_match.group(0)
-        line = line[emoji_match.end() :]
-    return prefix, line
+        return header_match.group(0), line[header_match.end() :]
+    return "", line
 
 
 def _split_into_sentences(text: str) -> list[str]:
@@ -127,6 +128,79 @@ def _split_into_sentences(text: str) -> list[str]:
     when a line packs more than one together, silently dropping the rest.
     """
     return _SENTENCE_RE.split(text)
+
+
+def _protect_emoji(text: str) -> tuple[str, list[str]]:
+    """Replace every emoji anywhere in text with a numbered placeholder.
+
+    Plain ASCII survives translation intact (confirmed empirically across
+    several target languages), unlike the emoji itself, which the model
+    doesn't have a token for and turns into a literal <unk>. Returns the
+    placeholder-substituted text plus the emoji found, in order, so they can
+    be put back after decoding.
+    """
+    found: list[str] = []
+
+    def _replace(match: re.Match) -> str:
+        found.append(match.group(0))
+        return f"{_EMOJI_PLACEHOLDER_PREFIX}{len(found) - 1}{_EMOJI_PLACEHOLDER_SUFFIX}"
+
+    return _EMOJI_RE.sub(_replace, text), found
+
+
+def _restore_emoji(text: str, found: list[str]) -> str:
+    """Put each emoji back where its placeholder from _protect_emoji ended up."""
+    for i, emoji in enumerate(found):
+        text = text.replace(f"{_EMOJI_PLACEHOLDER_PREFIX}{i}{_EMOJI_PLACEHOLDER_SUFFIX}", emoji)
+    return text
+
+
+def _prepare_lines(text: str) -> tuple[dict[int, str], dict[int, list[str]]]:
+    """Split text into lines, then each non-blank line into sentences.
+
+    Returns (prefixes, sentences_by_line) — prefixes holds each line's stripped
+    markdown heading marker (reattached untouched later), sentences_by_line
+    only has entries for lines that actually have translatable content.
+    """
+    prefixes: dict[int, str] = {}
+    sentences_by_line: dict[int, list[str]] = {}
+    for i, line in enumerate(text.split("\n")):
+        if not line.strip():
+            continue
+        prefix, rest = _split_header_prefix(line)
+        if not rest.strip():
+            continue
+        prefixes[i] = prefix
+        sentences_by_line[i] = [s for s in _split_into_sentences(rest) if s.strip()]
+    return prefixes, sentences_by_line
+
+
+def _build_segments(sentences_by_line: dict[int, list[str]]) -> list[tuple[int, str, list[str]]]:
+    """Normalize punctuation and protect emoji in every sentence, flattened for batching.
+
+    Each entry is (line_index, text ready for the tokenizer, emoji found in it).
+    """
+    segments = []
+    for i, sentences in sentences_by_line.items():
+        for sentence in sentences:
+            normalized = sentence.translate(_PUNCTUATION_NORMALIZATION)
+            protected, found_emoji = _protect_emoji(normalized)
+            segments.append((i, protected, found_emoji))
+    return segments
+
+
+def _decode_translations(
+    tokenizer: transformers.PreTrainedTokenizerBase,
+    flat_segments: list[tuple[int, str, list[str]]],
+    results: list,
+) -> dict[int, list[str]]:
+    """Decode each translated segment and restore its emoji, grouped back by line."""
+    translated_by_line: dict[int, list[str]] = defaultdict(list)
+    for (line_index, _, found_emoji), result in zip(flat_segments, results):
+        target_tokens = result.hypotheses[0][1:]
+        decoded = tokenizer.decode(tokenizer.convert_tokens_to_ids(target_tokens))
+        translated_by_line[line_index].append(_restore_emoji(decoded, found_emoji))
+    return translated_by_line
 
 
 @app.post("/translate", response_model=TranslateResponse)
@@ -138,34 +212,21 @@ def translate(req: TranslateRequest) -> TranslateResponse:
     cap — and the same thing happens within a single line when it packs more than
     one sentence together. Translating line by line, and sentence by sentence
     within each line, keeps every call short enough for the model to actually
-    finish. Protecting markdown heading markers/emoji per line keeps them from
-    being corrupted in the process, and normalizing smart punctuation to ASCII
-    avoids <unk> tokens the vocabulary doesn't cover.
+    finish. Protecting a markdown heading marker per line, and any emoji anywhere
+    in each sentence, keeps them from being corrupted in the process, and
+    normalizing smart punctuation to ASCII avoids <unk> tokens for those too.
     """
     translator = _get_translator()
     tokenizer = _get_tokenizer(req.source)
 
-    lines = req.q.split("\n")
-    prefixes: dict[int, str] = {}
-    sentences_by_line: dict[int, list[str]] = {}
-    for i, line in enumerate(lines):
-        if not line.strip():
-            continue
-        prefix, rest = _split_protected_prefix(line)
-        if not rest.strip():
-            continue
-        prefixes[i] = prefix
-        sentences_by_line[i] = [s for s in _split_into_sentences(rest) if s.strip()]
+    prefixes, sentences_by_line = _prepare_lines(req.q)
     if not sentences_by_line:
         return TranslateResponse(translatedText=req.q)
+    flat_segments = _build_segments(sentences_by_line)
 
-    flat_segments = [
-        (i, sentence.translate(_PUNCTUATION_NORMALIZATION))
-        for i, sentences in sentences_by_line.items()
-        for sentence in sentences
-    ]
     batch = [
-        tokenizer.convert_ids_to_tokens(tokenizer.encode(sentence)) for _, sentence in flat_segments
+        tokenizer.convert_ids_to_tokens(tokenizer.encode(segment))
+        for _, segment, _ in flat_segments
     ]
     max_decoding_length = min(
         _MAX_DECODING_LENGTH,
@@ -179,13 +240,9 @@ def translate(req: TranslateRequest) -> TranslateResponse:
         max_decoding_length=max_decoding_length,
     )
 
-    translated_by_line: dict[int, list[str]] = defaultdict(list)
-    for (line_index, _), result in zip(flat_segments, results):
-        target_tokens = result.hypotheses[0][1:]
-        decoded = tokenizer.decode(tokenizer.convert_tokens_to_ids(target_tokens))
-        translated_by_line[line_index].append(decoded)
+    translated_by_line = _decode_translations(tokenizer, flat_segments, results)
 
-    translated_lines = list(lines)
+    translated_lines = req.q.split("\n")
     for i in sentences_by_line:
         translated_lines[i] = prefixes[i] + " ".join(translated_by_line[i])
 

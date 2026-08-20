@@ -193,7 +193,7 @@ def test_translate_protects_leading_emoji():
     fake_translator.translate_batch.return_value = [fake_result]
 
     fake_tokenizer = MagicMock()
-    fake_tokenizer.decode.return_value = "hola mundo"
+    fake_tokenizer.decode.return_value = "xEMOJIx0x hola mundo"
 
     with (
         patch.object(server, "_translator", fake_translator),
@@ -204,7 +204,7 @@ def test_translate_protects_leading_emoji():
         )
 
     assert response.json() == {"translatedText": "🏗️ hola mundo"}
-    fake_tokenizer.encode.assert_called_once_with("hello world")
+    fake_tokenizer.encode.assert_called_once_with("xEMOJIx0x hello world")
 
 
 def test_translate_protects_leading_emoji_after_a_zero_width_space():
@@ -219,7 +219,7 @@ def test_translate_protects_leading_emoji_after_a_zero_width_space():
     fake_translator.translate_batch.return_value = [fake_result]
 
     fake_tokenizer = MagicMock()
-    fake_tokenizer.decode.return_value = "hola mundo"
+    fake_tokenizer.decode.return_value = "xEMOJIx0x hola mundo"
 
     with (
         patch.object(server, "_translator", fake_translator),
@@ -235,7 +235,59 @@ def test_translate_protects_leading_emoji_after_a_zero_width_space():
         )
 
     assert response.json() == {"translatedText": f"{zero_width_space}👑 hola mundo"}
-    fake_tokenizer.encode.assert_called_once_with("hello world")
+    fake_tokenizer.encode.assert_called_once_with("xEMOJIx0x hello world")
+
+
+def test_translate_protects_emoji_in_the_middle_of_a_sentence():
+    """Real bug: a flag emoji after "react cu", not at the start of the line,
+    was never protected -- it hit the tokenizer directly and NLLB doesn't have
+    a token for most flags (regional-indicator pairs), so it came back as a
+    literal <unk>.
+    """
+    fake_result = MagicMock()
+    fake_result.hypotheses = [["ita_Latn", "reagisci con xEMOJIx0x per favore"]]
+    fake_translator = MagicMock()
+    fake_translator.translate_batch.return_value = [fake_result]
+
+    fake_tokenizer = MagicMock()
+    fake_tokenizer.decode.return_value = "reagisci con xEMOJIx0x per favore"
+
+    with (
+        patch.object(server, "_translator", fake_translator),
+        patch.object(server, "_tokenizers", {"ron_Latn": fake_tokenizer}),
+    ):
+        response = client.post(
+            "/translate",
+            json={"q": "react cu 🇷🇴 please", "source": "ron_Latn", "target": "ita_Latn"},
+        )
+
+    assert response.json() == {"translatedText": "reagisci con 🇷🇴 per favore"}
+    fake_tokenizer.encode.assert_called_once_with("react cu xEMOJIx0x please")
+
+
+def test_translate_protects_multiple_emoji_in_the_same_sentence():
+    """Two different emoji in one sentence must each land back in their own spot,
+    not get mixed up with each other.
+    """
+    fake_result = MagicMock()
+    fake_result.hypotheses = [["spa_Latn", "hola xEMOJIx0x mundo xEMOJIx1x"]]
+    fake_translator = MagicMock()
+    fake_translator.translate_batch.return_value = [fake_result]
+
+    fake_tokenizer = MagicMock()
+    fake_tokenizer.decode.return_value = "hola xEMOJIx0x mundo xEMOJIx1x"
+
+    with (
+        patch.object(server, "_translator", fake_translator),
+        patch.object(server, "_tokenizers", {"eng_Latn": fake_tokenizer}),
+    ):
+        response = client.post(
+            "/translate",
+            json={"q": "hello 🎉 world 🔥", "source": "eng_Latn", "target": "spa_Latn"},
+        )
+
+    assert response.json() == {"translatedText": "hola 🎉 mundo 🔥"}
+    fake_tokenizer.encode.assert_called_once_with("hello xEMOJIx0x world xEMOJIx1x")
 
 
 def test_translate_skips_the_translator_for_a_heading_only_line():
