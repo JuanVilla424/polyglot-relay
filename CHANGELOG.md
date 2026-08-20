@@ -1,3 +1,98 @@
+## [1.0.13] - 2026-08-20
+
+### Features
+
+- **core**: announce every deploy.sh run to the log channel, not just the bot's own (`patch candidate`)
+
+### Bug Fixes
+
+- **core**: protect emoji anywhere in a sentence, not just as a line prefix
+- **core**: drop @everyone from the initial game event announcement
+- **core**: allow multi-day duration in /announceevent
+
+## [1.0.12] - 2026-08-19
+
+### Features
+
+- **core**: announce alliance-wide game events to the announcements channel (`patch candidate`)
+
+## [1.0.11] - 2026-08-19
+
+### Bug Fixes
+
+- **core**: use clean_content and stop repeating flag-triggered translations (`patch candidate`)
+
+## [1.0.10] - 2026-08-19
+
+### Features
+
+- **core**: remove guest role on verification (`patch candidate`)
+
+## [1.0.9] - 2026-08-19
+
+### Features
+
+- **core**: add activity module with admin reports (`patch candidate`)
+
+## [1.0.8] - 2026-08-19
+
+### Features
+
+- **core**: add polls module with native discord polls (`patch candidate`)
+- **core**: recognize more country flags when interpreting a translation reaction
+- **core**: create a native Discord Scheduled Event alongside /createvent
+
+### Bug Fixes
+
+- **core**: send the required privacy_level when creating a scheduled event
+- **core**: omit the image kwarg when creating a scheduled event without a picture
+- **core**: fall back to the default duration for events created before duration_minutes existed
+
+## [1.0.7] - 2026-08-19
+
+### Features
+
+- **core**: add verification module for photo-based role approval (`patch candidate`)
+
+### Bug Fixes
+
+- **core**: generalize deploy.sh to accept any compose service, not just bot
+- **core**: strip zero-width space before a leading emoji so nllb keeps it out of the model
+
+## [1.0.6] - 2026-08-19
+
+### Features
+
+- **core**: add event cancel button and commit-based deploy announcements
+- **core**: add channel exclusion and versioned deploy announcements
+- **core**: add a modular architecture with translation and events modules
+- **core**: make flag reactions the default translation delivery mode
+- **core**: add reactions as a fourth translation delivery mode
+- **core**: add dm as a third translation delivery mode
+- **core**: translate messages posted in threads and forum channels
+
+### Bug Fixes
+
+- **core**: abort deploy.sh when there are uncommitted changes
+- **core**: report polyglot-modules changes to the configured log channel too
+- **core**: offer the author's own configured language as a flag in reactions mode
+- **core**: skip the reaction flag matching the message's own detected language
+- **core**: split translations by sentence, not just by line, to stop dropping the second sentence
+- **core**: split translations across multiple embeds instead of truncating them
+- **core**: normalize typographic punctuation before translating
+- **core**: preserve markdown headings and emoji when translating
+- **core**: translate long messages line by line so nllb stops truncating them
+
+### Documentation
+
+- **core**: document deploy.sh in the README (`patch candidate`)
+
+### Chores
+
+- **core**: log event creation, cancellation, rsvp changes, and reminders sent
+- **core**: log which user triggers a reactions-mode translation
+- **core**: cap nllb cpu usage to avoid starving other host services
+
 ## [1.0.5] - 2026-08-16
 
 ### Bug Fixes

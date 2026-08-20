@@ -3,7 +3,7 @@ import asyncio
 import httpx
 
 from app.config import LIBRETRANSLATE_URL, NLLB_URL
-from app.lang_codes import to_flores
+from app.modules.translation.lang_codes import to_flores
 
 # NLLB inference is CPU-bound and single-instance; cap how many translate
 # requests hit it at once so a burst of messages can't starve the container.

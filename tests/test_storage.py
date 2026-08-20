@@ -3,164 +3,82 @@ from app import storage
 
 def _use_tmp_store(tmp_path, monkeypatch):
     monkeypatch.setattr(storage, "DATA_DIR", tmp_path)
-    monkeypatch.setattr(storage, "USER_LANGUAGES_PATH", tmp_path / "user_languages.json")
-    monkeypatch.setattr(storage, "ROLE_LANGUAGES_PATH", tmp_path / "role_languages.json")
-    monkeypatch.setattr(storage, "SERVER_LANGUAGE_PATH", tmp_path / "server_language.json")
-    monkeypatch.setattr(storage, "DELIVERY_MODE_PATH", tmp_path / "delivery_mode.json")
+    monkeypatch.setattr(storage, "ENABLED_MODULES_PATH", tmp_path / "enabled_modules.json")
 
 
-def test_get_user_language_missing_file_returns_none(tmp_path, monkeypatch):
-    """No store file on disk yet -> lookups return None instead of raising."""
+def test_read_json_missing_file_returns_empty_dict(tmp_path):
+    """No store file on disk yet -> reads return {} instead of raising."""
+    assert storage.read_json(tmp_path / "missing.json") == {}
+
+
+def test_write_json_then_read_json_round_trips(tmp_path):
+    """A written store reads back exactly what was written."""
+    path = tmp_path / "store.json"
+
+    storage.write_json(path, {"a": 1, "b": "two"})
+
+    assert storage.read_json(path) == {"a": 1, "b": "two"}
+
+
+def test_clear_key_removes_only_that_key(tmp_path):
+    """Clearing one key leaves the rest of the store untouched."""
+    path = tmp_path / "store.json"
+    storage.write_json(path, {"keep": 1, "drop": 2})
+
+    storage.clear_key(path, "drop")
+
+    assert storage.read_json(path) == {"keep": 1}
+
+
+def test_clear_key_is_a_noop_when_absent(tmp_path):
+    """Clearing a key that was never set doesn't raise."""
+    path = tmp_path / "store.json"
+
+    storage.clear_key(path, "missing")  # must not raise
+
+    assert storage.read_json(path) == {}
+
+
+def test_guild_scoped_entries_isolates_by_guild(tmp_path):
+    """Only entries whose key is prefixed with this guild's id are returned."""
+    path = tmp_path / "store.json"
+    storage.write_json(
+        path,
+        {
+            storage.make_key(1, 100): "es",
+            storage.make_key(1, 200): "en",
+            storage.make_key(2, 300): "fr",
+        },
+    )
+
+    assert storage.guild_scoped_entries(path, 1) == {100: "es", 200: "en"}
+    assert storage.guild_scoped_entries(path, 2) == {300: "fr"}
+
+
+def test_is_module_enabled_defaults_translation_on_and_others_off(tmp_path, monkeypatch):
+    """No explicit config anywhere -> translation is on, everything else is off."""
     _use_tmp_store(tmp_path, monkeypatch)
 
-    assert storage.get_user_language(1, 1) is None
+    assert storage.is_module_enabled(1, "translation") is True
+    assert storage.is_module_enabled(1, "events") is False
 
 
-def test_set_and_get_user_language(tmp_path, monkeypatch):
-    """A stored preference round-trips and stays scoped to its guild/user."""
+def test_set_module_enabled_overrides_the_default(tmp_path, monkeypatch):
+    """An explicit override wins over the built-in default, in both directions."""
     _use_tmp_store(tmp_path, monkeypatch)
 
-    storage.set_user_language(1, 100, "es")
+    storage.set_module_enabled(1, "events", True)
+    storage.set_module_enabled(1, "translation", False)
 
-    assert storage.get_user_language(1, 100) == "es"
-    assert storage.get_user_language(1, 999) is None
-    assert storage.get_user_language(2, 100) is None
+    assert storage.is_module_enabled(1, "events") is True
+    assert storage.is_module_enabled(1, "translation") is False
 
 
-def test_guild_user_languages_isolates_by_guild(tmp_path, monkeypatch):
-    """Two guilds sharing the same store never see each other's users."""
+def test_module_enabled_state_isolates_by_guild(tmp_path, monkeypatch):
+    """Enabling a module in one guild doesn't affect another guild's default."""
     _use_tmp_store(tmp_path, monkeypatch)
 
-    storage.set_user_language(1, 100, "es")
-    storage.set_user_language(1, 200, "en")
-    storage.set_user_language(2, 300, "fr")
+    storage.set_module_enabled(1, "events", True)
 
-    assert storage.guild_user_languages(1) == {100: "es", 200: "en"}
-    assert storage.guild_user_languages(2) == {300: "fr"}
-
-
-def test_role_languages_round_trip_and_isolate_by_guild(tmp_path, monkeypatch):
-    """Role mappings persist independently of user mappings and stay per-guild."""
-    _use_tmp_store(tmp_path, monkeypatch)
-
-    storage.set_role_language(1, 10, "es")
-    storage.set_role_language(1, 20, "en")
-    storage.set_role_language(2, 30, "fr")
-
-    assert storage.get_role_language(1, 10) == "es"
-    assert storage.get_role_language(1, 999) is None
-    assert storage.guild_role_languages(1) == {10: "es", 20: "en"}
-    assert storage.guild_role_languages(2) == {30: "fr"}
-    # User and role stores don't collide even with overlapping guild/id numbers.
-    assert storage.guild_user_languages(1) == {}
-
-
-def test_clear_user_language_removes_only_that_entry(tmp_path, monkeypatch):
-    """Clearing one user's language leaves everyone else untouched."""
-    _use_tmp_store(tmp_path, monkeypatch)
-    storage.set_user_language(1, 100, "es")
-    storage.set_user_language(1, 200, "en")
-
-    storage.clear_user_language(1, 100)
-
-    assert storage.get_user_language(1, 100) is None
-    assert storage.get_user_language(1, 200) == "en"
-
-
-def test_clear_user_language_is_a_noop_when_unset(tmp_path, monkeypatch):
-    """Clearing a language that was never set doesn't raise."""
-    _use_tmp_store(tmp_path, monkeypatch)
-
-    storage.clear_user_language(1, 100)  # must not raise
-
-    assert storage.get_user_language(1, 100) is None
-
-
-def test_clear_role_language_removes_only_that_entry(tmp_path, monkeypatch):
-    """Clearing one role's language leaves other roles untouched."""
-    _use_tmp_store(tmp_path, monkeypatch)
-    storage.set_role_language(1, 10, "es")
-    storage.set_role_language(1, 20, "en")
-
-    storage.clear_role_language(1, 10)
-
-    assert storage.get_role_language(1, 10) is None
-    assert storage.get_role_language(1, 20) == "en"
-
-
-def test_get_server_language_missing_returns_none(tmp_path, monkeypatch):
-    """No override stored yet -> lookup returns None instead of raising."""
-    _use_tmp_store(tmp_path, monkeypatch)
-
-    assert storage.get_server_language(1) is None
-
-
-def test_server_language_round_trip_and_isolates_by_guild(tmp_path, monkeypatch):
-    """A stored server-language override persists and stays scoped to its guild."""
-    _use_tmp_store(tmp_path, monkeypatch)
-
-    storage.set_server_language(1, "es")
-    storage.set_server_language(2, "fr")
-
-    assert storage.get_server_language(1) == "es"
-    assert storage.get_server_language(2) == "fr"
-
-
-def test_clear_server_language_removes_only_that_guild(tmp_path, monkeypatch):
-    """Clearing one guild's override leaves other guilds untouched."""
-    _use_tmp_store(tmp_path, monkeypatch)
-    storage.set_server_language(1, "es")
-    storage.set_server_language(2, "fr")
-
-    storage.clear_server_language(1)
-
-    assert storage.get_server_language(1) is None
-    assert storage.get_server_language(2) == "fr"
-
-
-def test_clear_server_language_is_a_noop_when_unset(tmp_path, monkeypatch):
-    """Clearing a server language that was never set doesn't raise."""
-    _use_tmp_store(tmp_path, monkeypatch)
-
-    storage.clear_server_language(1)  # must not raise
-
-    assert storage.get_server_language(1) is None
-
-
-def test_get_delivery_mode_missing_returns_none(tmp_path, monkeypatch):
-    """No override stored yet -> lookup returns None instead of raising."""
-    _use_tmp_store(tmp_path, monkeypatch)
-
-    assert storage.get_delivery_mode(1) is None
-
-
-def test_delivery_mode_round_trip_and_isolates_by_guild(tmp_path, monkeypatch):
-    """A stored delivery-mode override persists and stays scoped to its guild."""
-    _use_tmp_store(tmp_path, monkeypatch)
-
-    storage.set_delivery_mode(1, "thread")
-    storage.set_delivery_mode(2, "reply")
-
-    assert storage.get_delivery_mode(1) == "thread"
-    assert storage.get_delivery_mode(2) == "reply"
-
-
-def test_clear_delivery_mode_removes_only_that_guild(tmp_path, monkeypatch):
-    """Clearing one guild's override leaves other guilds untouched."""
-    _use_tmp_store(tmp_path, monkeypatch)
-    storage.set_delivery_mode(1, "thread")
-    storage.set_delivery_mode(2, "reply")
-
-    storage.clear_delivery_mode(1)
-
-    assert storage.get_delivery_mode(1) is None
-    assert storage.get_delivery_mode(2) == "reply"
-
-
-def test_clear_delivery_mode_is_a_noop_when_unset(tmp_path, monkeypatch):
-    """Clearing a delivery mode that was never set doesn't raise."""
-    _use_tmp_store(tmp_path, monkeypatch)
-
-    storage.clear_delivery_mode(1)  # must not raise
-
-    assert storage.get_delivery_mode(1) is None
+    assert storage.is_module_enabled(1, "events") is True
+    assert storage.is_module_enabled(2, "events") is False
