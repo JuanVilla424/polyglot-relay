@@ -1,3 +1,15 @@
+## [1.0.13] - 2026-08-20
+
+### Features
+
+- **core**: announce every deploy.sh run to the log channel, not just the bot's own (`patch candidate`)
+
+### Bug Fixes
+
+- **core**: protect emoji anywhere in a sentence, not just as a line prefix
+- **core**: drop @everyone from the initial game event announcement
+- **core**: allow multi-day duration in /announceevent
+
 ## [1.0.12] - 2026-08-19
 
 ### Features
