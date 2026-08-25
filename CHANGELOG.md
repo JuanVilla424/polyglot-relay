@@ -1,3 +1,18 @@
+## [1.0.14] - 2026-08-25
+
+### Features
+
+- **core**: add slack adapter with shared translation core (`patch candidate`)
+- **core**: protect in-game glossary terms from translation
+- **core**: announce event scheduling and reschedules to the announcements channel
+
+### Bug Fixes
+
+- **core**: restore emoji placeholders the model capitalized at sentence start
+- **core**: stop announceevent test depending on the local env channel id
+- **core**: remove unused language entry from the translation catalog
+- **core**: show the real commit subject in deploy announcements, not the version-bump one
+
 ## [1.0.13] - 2026-08-20
 
 ### Features

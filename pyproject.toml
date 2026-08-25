@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "polyglot-relay"
-version = "1.0.13"
+version = "1.0.14"
 description = "Self-hosted translation relay for Discord and Slack powered by NLLB-200"
 authors = ["B <g46327wsj1.marbling129@passinbox.com>"]
 license = "GPL-3.0-only"
