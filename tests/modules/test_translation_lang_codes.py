@@ -1,10 +1,12 @@
-from app.modules.translation.lang_codes import (
+from core.lang_codes import (
     FLAG_TO_ISO,
     ISO_TO_FLAG,
     ISO_TO_FLORES,
     ISO_TO_NAME,
     LANGUAGE_COLORS,
     color_for,
+    flag_to_slack_emoji,
+    slack_emoji_to_flag,
     to_flores,
 )
 
@@ -71,3 +73,36 @@ def test_iso_to_flag_stays_one_flag_per_language():
     a message should never get spammed with a dozen near-duplicate flags.
     """
     assert len(ISO_TO_FLAG) == len(set(ISO_TO_FLAG.values()))
+
+
+def test_slack_emoji_to_flag_derives_the_unicode_flag():
+    """Slack reports emoji by name; the Unicode flag is pure arithmetic away."""
+    assert slack_emoji_to_flag("flag-co") == "🇨🇴"
+    assert slack_emoji_to_flag("flag-es") == "🇪🇸"
+
+
+def test_slack_emoji_to_flag_accepts_slacks_bare_short_names():
+    """Slack's canonical name for a few classic flags is the bare country code
+    ("us", "gb", ...), with "flag-xx" as the alias -- both must resolve."""
+    assert slack_emoji_to_flag("us") == "🇺🇸"
+    assert slack_emoji_to_flag("gb") == "🇬🇧"
+
+
+def test_slack_emoji_to_flag_rejects_non_flag_names():
+    """Anything that isn't two ASCII letters (after the optional prefix) is not a flag."""
+    assert slack_emoji_to_flag("thumbsup") is None
+    assert slack_emoji_to_flag("flag-") is None
+    assert slack_emoji_to_flag("") is None
+
+
+def test_flag_to_slack_emoji_round_trips_every_known_flag():
+    """Every flag FLAG_TO_ISO understands survives the Unicode -> name -> Unicode trip."""
+    for flag in FLAG_TO_ISO:
+        name = flag_to_slack_emoji(flag)
+        assert name is not None
+        assert slack_emoji_to_flag(name) == flag
+
+
+def test_flag_to_slack_emoji_rejects_non_flags():
+    """A non-flag emoji has no Slack flag name."""
+    assert flag_to_slack_emoji("🎉") is None

@@ -1,8 +1,9 @@
 import discord
 
 from app.logger import logger
-from app.modules.translation import storage, translator
-from app.modules.translation.lang_codes import ISO_TO_FLAG, ISO_TO_NAME, color_for
+from app.modules.translation import storage
+from core import translator
+from core.lang_codes import ISO_TO_FLAG, ISO_TO_NAME, color_for
 
 # The server's own working language: always translated to, in addition to
 # whatever individual members/roles have configured. An admin can override

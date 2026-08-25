@@ -3,12 +3,12 @@ import discord
 from app.discord_utils import resolve_text_channel
 from app.logger import logger
 from app.modules.translation import storage
-from app.modules.translation.lang_codes import FLAG_TO_ISO
 from app.modules.translation.logic import (
     DEFAULT_DELIVERY_MODE,
     _translate_and_deliver,
     _translate_single_language,
 )
+from core.lang_codes import FLAG_TO_ISO
 
 
 async def handle_message(_client: discord.Client, message: discord.Message) -> None:

@@ -1,9 +1,15 @@
 import asyncio
+import os
 
 import httpx
 
-from app.config import LIBRETRANSLATE_URL, NLLB_URL
-from app.modules.translation.lang_codes import to_flores
+from core.lang_codes import to_flores
+
+# Read straight from the environment (with the compose-internal defaults) so
+# this module works identically from any platform adapter's container, without
+# importing an adapter-specific config module.
+LIBRETRANSLATE_URL = os.getenv("LIBRETRANSLATE_URL", "http://libretranslate:5000")
+NLLB_URL = os.getenv("NLLB_URL", "http://nllb:8000")
 
 # NLLB inference is CPU-bound and single-instance; cap how many translate
 # requests hit it at once so a burst of messages can't starve the container.

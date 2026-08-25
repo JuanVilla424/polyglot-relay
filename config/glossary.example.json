@@ -1,0 +1,31 @@
+{
+  "any_case": [
+    "Behemoth Points",
+    "Behemoth Raids",
+    "Behemoth Raid",
+    "Roots of War",
+    "Battle Abyss",
+    "Battle Duration",
+    "Druid Hut",
+    "Giant Bear",
+    "Thunder Roc",
+    "Flame Dragon",
+    "Magma Daemon",
+    "Frost Dragon",
+    "Night Roc",
+    "Necrogiant",
+    "Direbear",
+    "Hydra",
+    "Beastmasters",
+    "Beastmaster",
+    "Behemoths",
+    "Behemoth",
+    "Strongholds",
+    "Stronghold",
+    "Lifestones",
+    "Lifestone",
+    "cooldowns",
+    "cooldown"
+  ],
+  "exact_case": ["SUMMON", "FIGHTING", "DONATE"]
+}

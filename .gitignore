@@ -17,6 +17,9 @@ poetry.lock
 .env
 .env.*.local
 
+# Per-deployment glossary (only the .example ships in git)
+config/glossary.json
+
 # Bot runtime data (per-user language preferences)
 data/
 

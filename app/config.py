@@ -12,9 +12,6 @@ if not DISCORD_BOT_TOKEN:
     print("ERROR: DISCORD_BOT_TOKEN not set (define it in .env or the environment)")
     sys.exit(1)
 
-LIBRETRANSLATE_URL = os.getenv("LIBRETRANSLATE_URL", "http://libretranslate:5000")
-NLLB_URL = os.getenv("NLLB_URL", "http://nllb:8000")
-
 _log_channel_id = os.getenv("LOG_CHANNEL_ID")
 LOG_CHANNEL_ID = int(_log_channel_id) if _log_channel_id else None
 

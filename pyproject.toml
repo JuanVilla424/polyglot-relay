@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "polyglot-relay"
 version = "1.0.13"
-description = "Self-hosted Discord auto-translation bot powered by LibreTranslate"
+description = "Self-hosted translation relay for Discord and Slack powered by NLLB-200"
 authors = ["B <g46327wsj1.marbling129@passinbox.com>"]
 license = "GPL-3.0-only"
 readme = "README.md"
@@ -13,9 +13,17 @@ setuptools = ">=83.0,<85.0"
 idna = "^3.0"
 certifi = ">=2025.1.31,<2027.0.0"
 bump2version = "^1.0.0"
-"discord.py" = "^2.4.0"
 python-dotenv = "^1.0.1"
 httpx = "^0.27.0"
+
+# One platform SDK per adapter image: the Discord Dockerfile installs
+# main,discord and the Slack one main,slack -- neither ships the other's SDK.
+[tool.poetry.group.discord.dependencies]
+"discord.py" = "^2.4.0"
+
+[tool.poetry.group.slack.dependencies]
+slack-bolt = "^1.21.0"
+aiohttp = "^3.10.0"
 
 [tool.poetry.group.dev.dependencies]
 pre-commit = "^4.0.1"
@@ -55,7 +63,7 @@ exclude = '''
 
 [tool.pytest.ini_options]
 minversion = "6.0"
-addopts = "--cov=app --cov-report=xml:coverage.xml --cov-report=term"
+addopts = "--cov=app --cov=core --cov=slack_app --cov-report=xml:coverage.xml --cov-report=term"
 testpaths = ["tests"]
 pythonpath = ["."]
 

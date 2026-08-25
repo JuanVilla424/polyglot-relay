@@ -476,3 +476,52 @@ def test_translate_splits_sentences_after_stripping_a_heading_marker():
         )
 
     assert response.json() == {"translatedText": "### Primera. Segunda."}
+
+
+def test_load_glossary_missing_file_degrades_to_empty(tmp_path):
+    """No mounted glossary means an empty one -- the service must still start."""
+    # pylint: disable=protected-access
+    assert server._load_glossary(tmp_path / "absent.json") == ((), ())
+
+
+def test_load_glossary_invalid_json_degrades_to_empty(tmp_path):
+    """A malformed glossary file is ignored, never a crash at import time."""
+    path = tmp_path / "glossary.json"
+    path.write_text("{not json", encoding="utf-8")
+    # pylint: disable=protected-access
+    assert server._load_glossary(path) == ((), ())
+
+
+def test_load_glossary_non_object_json_degrades_to_empty(tmp_path):
+    """Valid JSON that isn't an object (e.g. a bare list) is rejected as a whole."""
+    path = tmp_path / "glossary.json"
+    path.write_text('["just", "a", "list"]', encoding="utf-8")
+    # pylint: disable=protected-access
+    assert server._load_glossary(path) == ((), ())
+
+
+def test_load_glossary_reads_both_term_groups_and_drops_blanks(tmp_path):
+    """Both groups load; blank/whitespace-only entries never become terms."""
+    path = tmp_path / "glossary.json"
+    path.write_text('{"any_case": ["Behemoth", "  "], "exact_case": ["SUMMON"]}', encoding="utf-8")
+    # pylint: disable=protected-access
+    assert server._load_glossary(path) == (("Behemoth",), ("SUMMON",))
+
+
+def test_terms_regex_is_none_for_an_empty_glossary():
+    """An empty alternation would match the empty string at every word boundary,
+    littering placeholders through the text -- the regex must be absent entirely."""
+    # pylint: disable=protected-access
+    assert server._terms_regex(()) is None
+
+
+def test_protect_verbatim_with_empty_glossary_leaves_plain_text_untouched():
+    """With no glossary mounted, only emoji get protected; words pass through."""
+    with (
+        patch.object(server, "_TERMS_ANY_CASE_RE", None),
+        patch.object(server, "_TERMS_EXACT_CASE_RE", None),
+    ):
+        # pylint: disable=protected-access
+        protected, found = server._protect_verbatim("the Beastmaster leads")
+    assert protected == "the Beastmaster leads"
+    assert found == []

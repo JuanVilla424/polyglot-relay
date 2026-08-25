@@ -5,6 +5,7 @@ from app.discord_utils import resolve_text_channel
 from app.logger import logger
 from app.modules.events import storage
 from app.modules.events.logic import (
+    EVERYONE_REMINDER_OFFSET_MINUTES,
     REMINDER_OFFSETS_MINUTES,
     build_reminder_text,
     send_to_announcements_channel,
@@ -12,15 +13,26 @@ from app.modules.events.logic import (
 
 
 async def _send_reminder(channel: discord.abc.Messageable, event: dict, offset: int) -> None:
-    """Post one reminder, mentioning only the members who RSVP'd going."""
-    going = [user_id for user_id, status in event["rsvps"].items() if status == "going"]
-    mentions = " ".join(f"<@{user_id}>" for user_id in going)
-    if offset == 0:
-        text = f"🔥 **{event['title']}** is starting now! {mentions}".strip()
+    """Post one reminder, mentioning only the members who RSVP'd going --
+    except the single EVERYONE_REMINDER_OFFSET_MINUTES mark, which pings
+    @everyone instead (no individual mentions on top: the ping covers them).
+    """
+    if offset == EVERYONE_REMINDER_OFFSET_MINUTES:
+        text = f"@everyone ⏰ **{event['title']}** starts <t:{event['timestamp']}:R>!"
+        allowed_mentions = discord.AllowedMentions(everyone=True)
     else:
-        text = f"⏰ **{event['title']}** starts <t:{event['timestamp']}:R> {mentions}".strip()
+        going = [user_id for user_id, status in event["rsvps"].items() if status == "going"]
+        mentions = " ".join(f"<@{user_id}>" for user_id in going)
+        if offset == 0:
+            text = f"🔥 **{event['title']}** is starting now! {mentions}".strip()
+        else:
+            text = f"⏰ **{event['title']}** starts <t:{event['timestamp']}:R> {mentions}".strip()
+        allowed_mentions = None
     try:
-        await channel.send(text)
+        if allowed_mentions is not None:
+            await channel.send(text, allowed_mentions=allowed_mentions)
+        else:
+            await channel.send(text)
         logger.info("sent the %s-minute reminder for event %r", offset, event["title"])
     except discord.HTTPException:
         logger.warning("could not send a reminder for event %s", event["title"])

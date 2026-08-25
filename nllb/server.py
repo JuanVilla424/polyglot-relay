@@ -1,5 +1,8 @@
 """Self-hosted NLLB-200 translation service, served over a small REST API."""
 
+import json
+import logging
+import os
 import re
 import threading
 from collections import defaultdict
@@ -47,52 +50,57 @@ _EMOJI_RE = re.compile(
 _PLACEHOLDER_PREFIX = "xEMOJIx"
 _PLACEHOLDER_SUFFIX = "x"
 
-# In-game glossary: proper nouns and UI labels the model must never translate
+# Deployment glossary: proper nouns and UI labels the model must never translate
 # (observed corrupted otherwise: "Beastmaster" -> "Maestrul Bestiei", "Roots of
-# War" -> "Rots of War", "Behemoth Points" dropped entirely). Matched
-# case-insensitively with word boundaries; the author's exact casing is what
-# gets restored. Bare "Giant" is deliberately absent -- too common a word to
-# claim case-insensitively; "Giant Bear" covers the behemoth's full name.
-_PROTECTED_TERMS_ANY_CASE = (
-    "Behemoth Points",
-    "Behemoth Raids",
-    "Behemoth Raid",
-    "Roots of War",
-    "Battle Abyss",
-    "Battle Duration",
-    "Druid Hut",
-    "Giant Bear",
-    "Thunder Roc",
-    "Flame Dragon",
-    "Magma Daemon",
-    "Frost Dragon",
-    "Night Roc",
-    "Necrogiant",
-    "Direbear",
-    "Hydra",
-    "Beastmasters",
-    "Beastmaster",
-    "Behemoths",
-    "Behemoth",
-    "Strongholds",
-    "Stronghold",
-    "Lifestones",
-    "Lifestone",
-    "cooldowns",
-    "cooldown",
-)
-# All-caps UI labels, matched case-SENSITIVELY: their lowercase forms are
-# ordinary words ("we are fighting tonight") that must stay translatable.
-_PROTECTED_TERMS_EXACT_CASE = ("SUMMON", "FIGHTING", "DONATE")
+# War" -> "Rots of War", "Behemoth Points" dropped entirely). "any_case" terms
+# are matched case-insensitively with word boundaries and the author's exact
+# casing is what gets restored; "exact_case" terms match case-SENSITIVELY, for
+# all-caps UI labels whose lowercase forms are ordinary words ("we are fighting
+# tonight") that must stay translatable.
+#
+# The terms live OUTSIDE the code, in a JSON file mounted per deployment
+# (see config/glossary.example.json): each deployment protects its own domain's
+# vocabulary, and none of it ever needs to touch this public repo.
+_GLOSSARY_PATH = Path(os.getenv("GLOSSARY_PATH", "/config/glossary.json"))
+_logger = logging.getLogger(__name__)
 
 
-def _terms_regex(terms: tuple[str, ...], flags: int = 0) -> re.Pattern:
+def _load_glossary(path: Path) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Read {"any_case": [...], "exact_case": [...]} from the mounted glossary.
+
+    A missing or malformed file degrades to an empty glossary (translation
+    still works, nothing is protected) rather than refusing to start.
+    """
+    if not path.exists():
+        _logger.warning("glossary file %s not found; running with an empty glossary", path)
+        return (), ()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        _logger.warning("glossary file %s is unreadable or invalid JSON; ignoring it", path)
+        return (), ()
+    if not isinstance(data, dict):
+        _logger.warning("glossary file %s must be a JSON object; ignoring it", path)
+        return (), ()
+    any_case = tuple(str(term) for term in data.get("any_case", []) if str(term).strip())
+    exact_case = tuple(str(term) for term in data.get("exact_case", []) if str(term).strip())
+    return any_case, exact_case
+
+
+def _terms_regex(terms: tuple[str, ...], flags: int = 0) -> re.Pattern | None:
     """Alternation over terms, longest first so "Behemoth Points" wins over
-    "Behemoth" regardless of how the source tuple is ordered."""
+    "Behemoth" regardless of how the source tuple is ordered.
+
+    None for an empty glossary: an empty alternation would match the empty
+    string at every word boundary, littering placeholders through the text.
+    """
+    if not terms:
+        return None
     ordered = sorted(terms, key=len, reverse=True)
     return re.compile(r"\b(?:" + "|".join(re.escape(term) for term in ordered) + r")\b", flags)
 
 
+_PROTECTED_TERMS_ANY_CASE, _PROTECTED_TERMS_EXACT_CASE = _load_glossary(_GLOSSARY_PATH)
 _TERMS_ANY_CASE_RE = _terms_regex(_PROTECTED_TERMS_ANY_CASE, re.IGNORECASE)
 _TERMS_EXACT_CASE_RE = _terms_regex(_PROTECTED_TERMS_EXACT_CASE)
 
@@ -201,8 +209,10 @@ def _protect_verbatim(text: str) -> tuple[str, list[str]]:
         return f"{_PLACEHOLDER_PREFIX}{len(found) - 1}{_PLACEHOLDER_SUFFIX}"
 
     text = _EMOJI_RE.sub(_replace, text)
-    text = _TERMS_ANY_CASE_RE.sub(_replace, text)
-    text = _TERMS_EXACT_CASE_RE.sub(_replace, text)
+    if _TERMS_ANY_CASE_RE is not None:
+        text = _TERMS_ANY_CASE_RE.sub(_replace, text)
+    if _TERMS_EXACT_CASE_RE is not None:
+        text = _TERMS_EXACT_CASE_RE.sub(_replace, text)
     return text, found
 
 

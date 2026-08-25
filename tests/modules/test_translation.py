@@ -7,7 +7,7 @@ import discord
 
 from app import storage as core_storage
 from app.modules.translation import commands, handlers, logic, scheduler, storage
-from app.modules.translation.lang_codes import ISO_TO_FLAG, ISO_TO_FLORES, color_for
+from core.lang_codes import ISO_TO_FLAG, ISO_TO_FLORES, color_for
 
 
 def _use_tmp_store(tmp_path, monkeypatch):
