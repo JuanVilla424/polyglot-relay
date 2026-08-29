@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import discord
 
 from app import storage as core_storage
+from app.modules import checks
 from app.modules.translation import commands, handlers, logic, scheduler, storage
 from core.lang_codes import ISO_TO_FLAG, ISO_TO_FLORES, color_for
 
@@ -1202,6 +1203,32 @@ def test_handle_reaction_add_skips_excluded_channel(tmp_path, monkeypatch):
     claimed = asyncio.run(handlers.handle_reaction_add(client, payload))
 
     assert claimed is False
+
+
+def test_handle_reaction_add_claims_but_never_translates_a_subject_authored_message(
+    tmp_path, monkeypatch
+):
+    """Anti-amplification: a flag reaction on a message written by a quarantined
+    member is claimed (True) but never translated -- nobody can make the bot
+    re-publish a marked account's content through a translation embed."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(checks, "SUBJECT_ROLE_ID", 555)
+    storage.set_delivery_mode(1, "reactions")
+    message = _make_message(100, content="scam text")
+    message.author.roles = [MagicMock(id=555)]
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.fetch_message = AsyncMock(return_value=message)
+    client = MagicMock(get_channel=MagicMock(return_value=channel))
+    translate = AsyncMock(side_effect=AssertionError("must not translate"))
+    monkeypatch.setattr(logic.translator, "translate", translate)
+    payload = _make_reaction_payload(
+        user_id=200, guild_id=1, channel_id=10, message_id=20, emoji="🇪🇸"
+    )
+
+    claimed = asyncio.run(handlers.handle_reaction_add(client, payload))
+
+    assert claimed is True
+    translate.assert_not_awaited()
 
 
 def test_handle_reaction_add_translates_and_replies_on_a_recognized_flag(tmp_path, monkeypatch):

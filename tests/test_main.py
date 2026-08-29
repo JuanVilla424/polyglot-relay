@@ -8,6 +8,7 @@ import discord
 
 from app import main as bot_main
 from app import storage
+from app.modules import checks
 
 
 def _use_tmp_store(tmp_path, monkeypatch):
@@ -148,6 +149,87 @@ def test_on_message_dispatches_to_every_active_modules_handler(tmp_path, monkeyp
 
     handle_a.assert_awaited_once_with(bot_main.client, message)
     handle_b.assert_awaited_once_with(bot_main.client, message)
+
+
+def test_on_message_ignores_subject_members(tmp_path, monkeypatch):
+    """A member carrying the quarantine role is never dispatched to any module --
+    their messages don't get translated, counted, or otherwise amplified."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(checks, "SUBJECT_ROLE_ID", 555)
+    handle_message = AsyncMock()
+    monkeypatch.setattr(
+        bot_main, "MODULES", {"fake": _make_fake_module(handle_message=handle_message)}
+    )
+    storage.set_module_enabled(1, "fake", True)
+    message = _make_message(100, guild_id=1)
+    message.author.roles = [MagicMock(id=555)]
+
+    asyncio.run(bot_main.on_message(message))
+
+    handle_message.assert_not_awaited()
+
+
+def test_on_raw_reaction_add_ignores_subject_members(tmp_path, monkeypatch):
+    """A quarantined member's reactions trigger nothing: no on-demand translation,
+    no RSVP, no verification approval."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    _set_bot_user_id(monkeypatch, 999)
+    monkeypatch.setattr(checks, "SUBJECT_ROLE_ID", 555)
+    handle_reaction_add = AsyncMock()
+    monkeypatch.setattr(
+        bot_main, "MODULES", {"fake": _make_fake_module(handle_reaction_add=handle_reaction_add)}
+    )
+    storage.set_module_enabled(1, "fake", True)
+    payload = _make_reaction_payload(user_id=100, guild_id=1)
+    payload.member.roles = [MagicMock(id=555)]
+
+    asyncio.run(bot_main.on_raw_reaction_add(payload))
+
+    handle_reaction_add.assert_not_awaited()
+
+
+def test_on_raw_reaction_remove_ignores_subject_members(tmp_path, monkeypatch):
+    """Reaction removals resolve the member through the guild cache (the raw
+    payload carries no member on removals) and are gated the same way."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    _set_bot_user_id(monkeypatch, 999)
+    monkeypatch.setattr(checks, "SUBJECT_ROLE_ID", 555)
+    handler = AsyncMock()
+    monkeypatch.setattr(
+        bot_main, "MODULES", {"fake": _make_fake_module(handle_reaction_remove=handler)}
+    )
+    storage.set_module_enabled(1, "fake", True)
+    payload = _make_reaction_payload(user_id=100, guild_id=1)
+    payload.member = None
+    quarantined = MagicMock()
+    quarantined.roles = [MagicMock(id=555)]
+    guild = MagicMock()
+    guild.get_member.return_value = quarantined
+    monkeypatch.setattr(bot_main.client, "get_guild", MagicMock(return_value=guild), raising=False)
+
+    asyncio.run(bot_main.on_raw_reaction_remove(payload))
+
+    handler.assert_not_awaited()
+
+
+def test_is_subject_false_when_unconfigured_or_memberless():
+    """Unset SUBJECT_ROLE_ID or a missing/roleless member never quarantines anyone."""
+    assert checks.is_subject(None) is False
+    member = MagicMock()
+    member.roles = [MagicMock(id=1)]
+    assert checks.is_subject(member) is False  # SUBJECT_ROLE_ID unset in tests
+
+
+def test_is_subject_matches_only_the_configured_role(monkeypatch):
+    """True exactly when the member carries the configured quarantine role."""
+    monkeypatch.setattr(checks, "SUBJECT_ROLE_ID", 555)
+    marked = MagicMock()
+    marked.roles = [MagicMock(id=1), MagicMock(id=555)]
+    clean = MagicMock()
+    clean.roles = [MagicMock(id=1)]
+
+    assert checks.is_subject(marked) is True
+    assert checks.is_subject(clean) is False
 
 
 def test_on_message_skips_modules_without_a_message_handler(tmp_path, monkeypatch):
