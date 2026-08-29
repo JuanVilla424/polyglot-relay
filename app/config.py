@@ -12,9 +12,6 @@ if not DISCORD_BOT_TOKEN:
     print("ERROR: DISCORD_BOT_TOKEN not set (define it in .env or the environment)")
     sys.exit(1)
 
-LIBRETRANSLATE_URL = os.getenv("LIBRETRANSLATE_URL", "http://libretranslate:5000")
-NLLB_URL = os.getenv("NLLB_URL", "http://nllb:8000")
-
 _log_channel_id = os.getenv("LOG_CHANNEL_ID")
 LOG_CHANNEL_ID = int(_log_channel_id) if _log_channel_id else None
 
@@ -32,6 +29,12 @@ MEMBER_ROLE_ID = int(_member_role_id) if _member_role_id else None
 
 _guest_role_id = os.getenv("GUEST_ROLE_ID")
 GUEST_ROLE_ID = int(_guest_role_id) if _guest_role_id else None
+
+_subject_role_id = os.getenv("SUBJECT_ROLE_ID")
+SUBJECT_ROLE_ID = int(_subject_role_id) if _subject_role_id else None
+
+_honeypot_channel_id = os.getenv("HONEYPOT_CHANNEL_ID")
+HONEYPOT_CHANNEL_ID = int(_honeypot_channel_id) if _honeypot_channel_id else None
 
 _verify_approver_role_ids = os.getenv("VERIFY_APPROVER_ROLE_IDS", "")
 VERIFY_APPROVER_ROLE_IDS = [

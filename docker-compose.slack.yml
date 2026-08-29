@@ -1,7 +1,10 @@
 ---
+# Work/Slack deployment stack: its own containers and volumes, fully separate
+# from the Discord stack in docker-compose.yml. Run with:
+#   docker compose -f docker-compose.slack.yml up -d --build
 services:
   libretranslate:
-    container_name: polyglot-relay-libretranslate
+    container_name: polyglot-relay-slack-libretranslate
     image: libretranslate/libretranslate:v1.9.6
     restart: always
     expose:
@@ -13,10 +16,10 @@ services:
       retries: 4
       start_period: 5s
     volumes:
-      - libretranslate-models:/home/libretranslate/.local:rw
+      - slack-libretranslate-models:/home/libretranslate/.local:rw
 
   nllb:
-    container_name: polyglot-relay-nllb
+    container_name: polyglot-relay-slack-nllb
     build: ./nllb
     restart: always
     expose:
@@ -32,14 +35,16 @@ services:
       retries: 4
       start_period: 5s
     volumes:
-      - nllb-model:/models
+      - slack-nllb-model:/models
       # Directory mount, not a file mount: if glossary.json is absent Docker
       # would create it as a directory; the directory itself is always in git.
       - ./config:/config:ro
 
-  bot:
-    container_name: polyglot-relay-bot
-    build: .
+  slack-bot:
+    container_name: polyglot-relay-slack-bot
+    build:
+      context: .
+      dockerfile: slack_app/Dockerfile
     restart: always
     depends_on:
       libretranslate:
@@ -58,9 +63,9 @@ services:
       retries: 4
       start_period: 15s
     volumes:
-      - polyglot-relay-data:/app/data
+      - polyglot-relay-slack-data:/app/data
 
 volumes:
-  libretranslate-models:
-  nllb-model:
-  polyglot-relay-data:
+  slack-libretranslate-models:
+  slack-nllb-model:
+  polyglot-relay-slack-data:

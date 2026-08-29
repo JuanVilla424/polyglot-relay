@@ -3,14 +3,15 @@ from discord import app_commands
 
 from app.discord_utils import report_to_log_channel as _report_language_change
 from app.logger import logger
-from app.modules.translation import storage, translator
-from app.modules.translation.lang_codes import ISO_TO_FLORES, ISO_TO_NAME, to_flores
+from app.modules.translation import storage
 from app.modules.translation.logic import (
     DEFAULT_DELIVERY_MODE,
     DEFAULT_SERVER_LANGUAGE,
     _resolve_member_language,
     _translate_and_deliver,
 )
+from core import translator
+from core.lang_codes import ISO_TO_FLORES, ISO_TO_NAME, to_flores
 
 
 async def _admin_command_error(

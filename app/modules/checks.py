@@ -1,6 +1,18 @@
 from discord import app_commands
 
 from app import storage
+from app.config import SUBJECT_ROLE_ID
+
+
+def is_subject(member) -> bool:
+    """True when member carries the quarantine role (SUBJECT_ROLE_ID).
+
+    None-safe on both sides: an unset SUBJECT_ROLE_ID, a missing member
+    (uncached, DM), or a user object without roles never quarantines anyone.
+    """
+    if SUBJECT_ROLE_ID is None or member is None:
+        return False
+    return any(role.id == SUBJECT_ROLE_ID for role in getattr(member, "roles", []))
 
 
 class ModuleDisabledError(app_commands.CheckFailure):

@@ -12,7 +12,11 @@ RSVP_EMOJIS = {"✅": "going", "❓": "maybe", "❌": "not_going"}
 RSVP_LABELS = {"going": "✅ Going", "maybe": "❓ Maybe", "not_going": "❌ Not going"}
 
 # Reminders fire this many minutes before the event (0 = at the event itself).
-REMINDER_OFFSETS_MINUTES = [60, 30, 10, 0]
+REMINDER_OFFSETS_MINUTES = [60, 30, 15, 10, 0]
+
+# The ONE offset that pings @everyone -- every other reminder mentions only the
+# members who RSVP'd going.
+EVERYONE_REMINDER_OFFSET_MINUTES = 15
 
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TIME_RE = re.compile(r"^\d{2}:\d{2}$")

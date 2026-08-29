@@ -207,6 +207,104 @@ def test_translate_protects_leading_emoji():
     fake_tokenizer.encode.assert_called_once_with("xEMOJIx0x hello world")
 
 
+def test_translate_restores_an_emoji_placeholder_the_model_capitalized():
+    """Real bug (Beastmaster guide -> Romanian): a placeholder that lands at the
+    start of a sentence gets treated as a word and capitalized by the model
+    (xEMOJIx0x -> XEMOJIx0x), so a case-sensitive restore left the literal
+    placeholder in the published translation instead of the emoji.
+    """
+    fake_result = MagicMock()
+    fake_result.hypotheses = [["ron_Latn", "convocarea"]]
+    fake_translator = MagicMock()
+    fake_translator.translate_batch.return_value = [fake_result]
+
+    fake_tokenizer = MagicMock()
+    fake_tokenizer.decode.return_value = "XEMOJIx0x Beastmaster - convocarea"
+
+    with (
+        patch.object(server, "_translator", fake_translator),
+        patch.object(server, "_tokenizers", {"eng_Latn": fake_tokenizer}),
+    ):
+        response = client.post(
+            "/translate",
+            json={"q": "🐲 Beastmaster — summoning", "source": "eng_Latn", "target": "ron_Latn"},
+        )
+
+    assert response.json() == {"translatedText": "🐲 Beastmaster - convocarea"}
+
+
+def _translate_with_decode(source_text: str, decoded_text: str) -> tuple[dict, MagicMock]:
+    """Run /translate with the model mocked to return decoded_text; returns
+    (response json, fake_tokenizer) so callers can assert what got encoded."""
+    fake_result = MagicMock()
+    fake_result.hypotheses = [["spa_Latn", "x"]]
+    fake_translator = MagicMock()
+    fake_translator.translate_batch.return_value = [fake_result]
+
+    fake_tokenizer = MagicMock()
+    fake_tokenizer.decode.return_value = decoded_text
+
+    with (
+        patch.object(server, "_translator", fake_translator),
+        patch.object(server, "_tokenizers", {"eng_Latn": fake_tokenizer}),
+    ):
+        response = client.post(
+            "/translate", json={"q": source_text, "source": "eng_Latn", "target": "spa_Latn"}
+        )
+    return response.json(), fake_tokenizer
+
+
+def test_translate_protects_a_glossary_term():
+    """Real bug (Beastmaster guide -> Romanian): in-game terms came back
+    translated or corrupted ("Beastmaster" -> "Maestrul Bestiei"); glossary
+    terms must reach the model as placeholders and come back verbatim.
+    """
+    result, fake_tokenizer = _translate_with_decode("the Beastmaster leads", "el xEMOJIx0x lidera")
+
+    assert result == {"translatedText": "el Beastmaster lidera"}
+    fake_tokenizer.encode.assert_called_once_with("the xEMOJIx0x leads")
+
+
+def test_translate_protects_a_multi_word_term_as_one_unit():
+    """ "Behemoth Points" is one term -- longest-first matching, so it must not
+    decompose into a protected "Behemoth" plus a translatable "Points"
+    (the Romanian incident dropped "Points" entirely).
+    """
+    result, fake_tokenizer = _translate_with_decode(
+        "spend Behemoth Points wisely", "gasta xEMOJIx0x sabiamente"
+    )
+
+    assert result == {"translatedText": "gasta Behemoth Points sabiamente"}
+    fake_tokenizer.encode.assert_called_once_with("spend xEMOJIx0x wisely")
+
+
+def test_translate_keeps_the_authors_casing_on_a_protected_term():
+    """Matching is case-insensitive but restoring gives back exactly what the
+    author wrote -- a lowercase "behemoths" stays lowercase."""
+    result, _ = _translate_with_decode("two behemoths fell", "dos xEMOJIx0x cayeron")
+
+    assert result == {"translatedText": "dos behemoths cayeron"}
+
+
+def test_translate_leaves_common_words_alone():
+    """Only the exact all-caps UI label is protected -- lowercase "fighting" in a
+    normal sentence must still reach the model translatable."""
+    _, fake_tokenizer = _translate_with_decode("we are fighting tonight", "peleamos hoy")
+
+    fake_tokenizer.encode.assert_called_once_with("we are fighting tonight")
+
+
+def test_translate_protects_an_emoji_and_a_term_in_the_same_sentence():
+    """Emoji and glossary terms share one placeholder namespace -- interleaved
+    indices must each restore to their own original."""
+    result, fake_tokenizer = _translate_with_decode(
+        "⚔️ the Beastmaster strikes", "xEMOJIx0x el xEMOJIx1x golpea"
+    )
+
+    assert result == {"translatedText": "⚔️ el Beastmaster golpea"}
+    fake_tokenizer.encode.assert_called_once_with("xEMOJIx0x the xEMOJIx1x strikes")
+
+
 def test_translate_protects_leading_emoji_after_a_zero_width_space():
     """Real bug: a zero-width space (U+200B) before the emoji -- common residue
     from copy-pasting rich text -- broke the anchored emoji regex entirely, so
@@ -378,3 +476,52 @@ def test_translate_splits_sentences_after_stripping_a_heading_marker():
         )
 
     assert response.json() == {"translatedText": "### Primera. Segunda."}
+
+
+def test_load_glossary_missing_file_degrades_to_empty(tmp_path):
+    """No mounted glossary means an empty one -- the service must still start."""
+    # pylint: disable=protected-access
+    assert server._load_glossary(tmp_path / "absent.json") == ((), ())
+
+
+def test_load_glossary_invalid_json_degrades_to_empty(tmp_path):
+    """A malformed glossary file is ignored, never a crash at import time."""
+    path = tmp_path / "glossary.json"
+    path.write_text("{not json", encoding="utf-8")
+    # pylint: disable=protected-access
+    assert server._load_glossary(path) == ((), ())
+
+
+def test_load_glossary_non_object_json_degrades_to_empty(tmp_path):
+    """Valid JSON that isn't an object (e.g. a bare list) is rejected as a whole."""
+    path = tmp_path / "glossary.json"
+    path.write_text('["just", "a", "list"]', encoding="utf-8")
+    # pylint: disable=protected-access
+    assert server._load_glossary(path) == ((), ())
+
+
+def test_load_glossary_reads_both_term_groups_and_drops_blanks(tmp_path):
+    """Both groups load; blank/whitespace-only entries never become terms."""
+    path = tmp_path / "glossary.json"
+    path.write_text('{"any_case": ["Behemoth", "  "], "exact_case": ["SUMMON"]}', encoding="utf-8")
+    # pylint: disable=protected-access
+    assert server._load_glossary(path) == (("Behemoth",), ("SUMMON",))
+
+
+def test_terms_regex_is_none_for_an_empty_glossary():
+    """An empty alternation would match the empty string at every word boundary,
+    littering placeholders through the text -- the regex must be absent entirely."""
+    # pylint: disable=protected-access
+    assert server._terms_regex(()) is None
+
+
+def test_protect_verbatim_with_empty_glossary_leaves_plain_text_untouched():
+    """With no glossary mounted, only emoji get protected; words pass through."""
+    with (
+        patch.object(server, "_TERMS_ANY_CASE_RE", None),
+        patch.object(server, "_TERMS_EXACT_CASE_RE", None),
+    ):
+        # pylint: disable=protected-access
+        protected, found = server._protect_verbatim("the Beastmaster leads")
+    assert protected == "the Beastmaster leads"
+    assert found == []

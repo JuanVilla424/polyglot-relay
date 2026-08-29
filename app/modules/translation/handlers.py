@@ -2,13 +2,14 @@ import discord
 
 from app.discord_utils import resolve_text_channel
 from app.logger import logger
+from app.modules import checks
 from app.modules.translation import storage
-from app.modules.translation.lang_codes import FLAG_TO_ISO
 from app.modules.translation.logic import (
     DEFAULT_DELIVERY_MODE,
     _translate_and_deliver,
     _translate_single_language,
 )
+from core.lang_codes import FLAG_TO_ISO
 
 
 async def handle_message(_client: discord.Client, message: discord.Message) -> None:
@@ -33,10 +34,7 @@ async def handle_reaction_add(
         return False
 
     mode = storage.get_delivery_mode(payload.guild_id) or DEFAULT_DELIVERY_MODE
-    if mode != "reactions":
-        return False
-
-    if storage.is_channel_excluded(payload.guild_id, payload.channel_id):
+    if mode != "reactions" or storage.is_channel_excluded(payload.guild_id, payload.channel_id):
         return False
 
     channel = await resolve_text_channel(client, payload.channel_id)
@@ -46,6 +44,11 @@ async def handle_reaction_add(
     try:
         message = await channel.fetch_message(payload.message_id)
     except discord.HTTPException:
+        return True
+
+    # Anti-amplification: never translate (re-publish) content written by a
+    # quarantined member, no matter who reacted. Claimed so no module retries.
+    if checks.is_subject(getattr(message, "author", None)):
         return True
 
     logger.info(

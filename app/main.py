@@ -4,10 +4,10 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from app import discord_utils, storage
+from app import discord_utils, honeypot, storage
 from app.config import DISCORD_BOT_TOKEN
 from app.logger import logger
-from app.modules import MODULES
+from app.modules import MODULES, checks
 from app.modules.activity.scheduler import activity_digest_loop
 from app.modules.events.scheduler import reminder_loop
 from app.modules.events.views import EventView
@@ -50,10 +50,27 @@ async def on_ready():
     logger.info("logged in as %s", client.user)
 
 
+def _reaction_member(payload: discord.RawReactionActionEvent):
+    """Resolve who reacted: the payload carries the member on adds; removals
+    only carry ids, so fall back to the guild cache (Members Intent is on)."""
+    if payload.member is not None:
+        return payload.member
+    guild = client.get_guild(payload.guild_id)
+    return guild.get_member(payload.user_id) if guild else None
+
+
 @client.event
 async def on_message(message: discord.Message):
-    """Dispatch a new message to every module active in this guild."""
+    """Dispatch a new message to every module active in this guild.
+
+    Quarantined members (subject role) are dropped before any module runs:
+    their content must never be translated, counted, or amplified.
+    """
     if message.author.bot or message.guild is None:
+        return
+    if await honeypot.handle_honeypot_message(client, message):
+        return
+    if checks.is_subject(message.author):
         return
     for module in _active_modules(message.guild.id):
         handler = getattr(module.handlers, "handle_message", None)
@@ -71,6 +88,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent) -> None:
     """
     if payload.user_id == client.user.id or payload.guild_id is None:
         return
+    if checks.is_subject(_reaction_member(payload)):
+        return
     for module in _active_modules(payload.guild_id):
         handler = getattr(module.handlers, "handle_reaction_add", None)
         if handler and await handler(client, payload):
@@ -81,6 +100,8 @@ async def on_raw_reaction_add(payload: discord.RawReactionActionEvent) -> None:
 async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent) -> None:
     """Dispatch a reaction removal to the first active module that claims it."""
     if payload.user_id == client.user.id or payload.guild_id is None:
+        return
+    if checks.is_subject(_reaction_member(payload)):
         return
     for module in _active_modules(payload.guild_id):
         handler = getattr(module.handlers, "handle_reaction_remove", None)

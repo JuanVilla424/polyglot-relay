@@ -198,3 +198,33 @@ def color_for(iso_code: str) -> int:
     """
     index = _LANGUAGE_ORDER.index(iso_code) if iso_code in _LANGUAGE_ORDER else 0
     return LANGUAGE_COLORS[index % len(LANGUAGE_COLORS)]
+
+
+# Slack events carry emoji as names ("flag-co"), not Unicode. A country flag is
+# two regional-indicator characters, which map 1:1 to ASCII letters -- so both
+# directions are pure arithmetic and FLAG_TO_ISO keeps working unchanged as the
+# single source of truth for which flags mean which language.
+_REGIONAL_INDICATOR_A = 0x1F1E6
+
+
+def slack_emoji_to_flag(name: str) -> str | None:
+    """Unicode flag for a Slack flag-emoji name ("flag-co" -> "🇨🇴").
+
+    Also accepts the bare two-letter form: Slack's canonical name for a few
+    classic flags is just the country code ("us", "gb", "jp", ...), with
+    "flag-xx" as its alias. A two-letter name that isn't actually a flag
+    converts to a flag no language claims, so FLAG_TO_ISO filters it out.
+    """
+    code = name[len("flag-") :] if name.startswith("flag-") else name
+    if len(code) != 2 or not code.isascii() or not code.isalpha():
+        return None
+    return "".join(chr(_REGIONAL_INDICATOR_A + ord(char) - ord("a")) for char in code.lower())
+
+
+def flag_to_slack_emoji(flag: str) -> str | None:
+    """Slack emoji name for a Unicode regional-indicator flag ("🇨🇴" -> "flag-co")."""
+    if len(flag) != 2 or any(
+        not _REGIONAL_INDICATOR_A <= ord(char) <= _REGIONAL_INDICATOR_A + 25 for char in flag
+    ):
+        return None
+    return "flag-" + "".join(chr(ord(char) - _REGIONAL_INDICATOR_A + ord("a")) for char in flag)

@@ -196,7 +196,7 @@ def test_pending_reminder_offsets_all_pending_for_a_far_future_event():
     created_at = 0
     event_timestamp = created_at + 3 * 3600  # 3 hours out
 
-    assert logic.pending_reminder_offsets(created_at, event_timestamp) == [60, 30, 10, 0]
+    assert logic.pending_reminder_offsets(created_at, event_timestamp) == [60, 30, 15, 10, 0]
 
 
 def test_pending_reminder_offsets_drops_offsets_already_elapsed_at_creation():
@@ -204,7 +204,7 @@ def test_pending_reminder_offsets_drops_offsets_already_elapsed_at_creation():
     created_at = 0
     event_timestamp = created_at + 20 * 60
 
-    assert logic.pending_reminder_offsets(created_at, event_timestamp) == [10, 0]
+    assert logic.pending_reminder_offsets(created_at, event_timestamp) == [15, 10, 0]
 
 
 def test_pending_reminder_offsets_empty_for_an_event_created_at_zero_notice():
@@ -577,10 +577,10 @@ def test_createvent_pre_marks_reminders_already_elapsed_at_creation(tmp_path, mo
         )
     )
 
-    # 5 minutes' notice: the 60/30/10-minute marks are all already in the past
+    # 5 minutes' notice: the 60/30/15/10-minute marks are all already in the past
     # at creation time -- only the "at the event" (0) mark is still ahead.
     saved = storage.get_event(888)
-    assert saved["reminders_sent"] == [60, 30, 10]
+    assert saved["reminders_sent"] == [60, 30, 15, 10]
 
 
 def test_listevents_reports_no_upcoming_events_when_empty(tmp_path, monkeypatch):
@@ -1105,7 +1105,9 @@ def test_process_event_reminders_sends_the_due_offset_and_marks_it_sent(tmp_path
     already have marked them, so that's the realistic state to test.
     """
     _use_tmp_store(tmp_path, monkeypatch)
-    event = _make_event(timestamp=1000, rsvps={"1": "going", "2": "maybe"}, reminders_sent=[60, 30])
+    event = _make_event(
+        timestamp=1000, rsvps={"1": "going", "2": "maybe"}, reminders_sent=[60, 30, 15]
+    )
     channel = MagicMock()
     channel.send = AsyncMock()
     client = MagicMock()
@@ -1119,13 +1121,50 @@ def test_process_event_reminders_sends_the_due_offset_and_marks_it_sent(tmp_path
     sent_text = channel.send.call_args.args[0]
     assert "<@1>" in sent_text
     assert "<@2>" not in sent_text  # only "going" gets mentioned, not "maybe"
+    assert "@everyone" not in sent_text  # only the 15-minute reminder pings everyone
     assert 10 in event["reminders_sent"]
+
+
+def test_process_event_reminders_15_minute_mark_pings_everyone_once(tmp_path, monkeypatch):
+    """T-15 is the single general ping: @everyone, explicitly allowed, and no
+    individual going-mentions on top (the ping already covers them)."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    event = _make_event(timestamp=1000, rsvps={"1": "going"}, reminders_sent=[60, 30])
+    channel = MagicMock()
+    channel.send = AsyncMock()
+    monkeypatch.setattr(scheduler, "resolve_text_channel", AsyncMock(return_value=channel))
+
+    now = 1000 - 15 * 60  # the 15-minute mark is exactly due
+    asyncio.run(scheduler._process_event_reminders(MagicMock(), 42, event, now))
+
+    channel.send.assert_awaited_once()
+    sent_text = channel.send.call_args.args[0]
+    assert "@everyone" in sent_text
+    assert "<@1>" not in sent_text
+    assert channel.send.call_args.kwargs["allowed_mentions"].everyone is True
+    assert 15 in event["reminders_sent"]
+
+
+def test_process_event_reminders_start_reminder_does_not_ping_everyone(tmp_path, monkeypatch):
+    """The at-start (offset 0) reminder stays going-only -- no second @everyone."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    event = _make_event(timestamp=1000, rsvps={"1": "going"}, reminders_sent=[60, 30, 15, 10])
+    channel = MagicMock()
+    channel.send = AsyncMock()
+    monkeypatch.setattr(scheduler, "resolve_text_channel", AsyncMock(return_value=channel))
+
+    asyncio.run(scheduler._process_event_reminders(MagicMock(), 42, event, now=1000))
+
+    channel.send.assert_awaited_once()
+    sent_text = channel.send.call_args.args[0]
+    assert "@everyone" not in sent_text
+    assert "<@1>" in sent_text
 
 
 def test_process_event_reminders_does_not_resend_an_already_sent_offset(tmp_path, monkeypatch):
     """Every offset through the 10-minute mark was already sent -- nothing new is due yet."""
     _use_tmp_store(tmp_path, monkeypatch)
-    event = _make_event(timestamp=1000, reminders_sent=[60, 30, 10])
+    event = _make_event(timestamp=1000, reminders_sent=[60, 30, 15, 10])
     channel = MagicMock()
     channel.send = AsyncMock()
     monkeypatch.setattr(scheduler, "resolve_text_channel", AsyncMock(return_value=channel))

@@ -5,7 +5,9 @@
 ![Status](https://img.shields.io/badge/Status-Stable-green.svg)
 ![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)
 
-**polyglot-relay** is a self-hosted Discord auto-translation bot. It replaces rate-limited SaaS translators (like iTranslator's 10,000 chars/server and 2,000 chars/user free-tier caps, with the full language catalog paywalled behind Premium) with a fully self-hosted pipeline: no character limits, no paywalled languages, and no dependency on a paid third-party translation API. Language detection runs on [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate); the actual translation runs on a self-hosted [NLLB-200](https://github.com/facebookresearch/flores/tree/main/flores200) (Meta) model via [CTranslate2](https://github.com/OpenNMT/CTranslate2) for meaningfully better quality than Argos Translate alone.
+**polyglot-relay** is a self-hosted translation relay for **Discord and Slack**. It replaces rate-limited SaaS translators (like iTranslator's 10,000 chars/server and 2,000 chars/user free-tier caps, with the full language catalog paywalled behind Premium) with a fully self-hosted pipeline: no character limits, no paywalled languages, and no dependency on a paid third-party translation API. Language detection runs on [LibreTranslate](https://github.com/LibreTranslate/LibreTranslate); the actual translation runs on a self-hosted [NLLB-200](https://github.com/facebookresearch/flores/tree/main/flores200) (Meta) model via [CTranslate2](https://github.com/OpenNMT/CTranslate2) for meaningfully better quality than Argos Translate alone.
+
+Both platform adapters share the same translation core (`core/` plus the `nllb` and `libretranslate` services) but run as fully separate Docker stacks: the Discord adapter is the full-featured bot described below, and the [Slack adapter](#-slack-adapter) is a deliberately quiet, on-demand-only workspace tool (message shortcut + flag reactions, everything delivered ephemerally).
 
 Each server member sets their own preferred language once — directly, inherited from a role, or set for them by an admin. By default, every message gets one flag-emoji reaction per language actually active in that channel, plus the server's configured fallback language — nothing is translated upfront, so the channel stays quiet; clicking a flag posts a public, color-coded translation embed as a reply, visible to everyone. Admins can switch a server to always reply with every active language upfront, to thread delivery, or to private per-member DMs, instead with `/setbehavior`. A right-click "Translate Message" command is also available for one-off, ephemeral translations.
 
@@ -18,6 +20,8 @@ Each server member sets their own preferred language once — directly, inherite
   - [Environment Setup](#-environment-setup)
   - [Discord Application Setup](#-discord-application-setup)
   - [Running the Bot](#-running-the-bot)
+  - [Translation Glossary](#-translation-glossary)
+  - [Slack Adapter](#-slack-adapter)
   - [Pre-Commit Hooks](#-pre-commit-hooks)
   - [Extra Steps](#-extra-steps)
 - [Usage](#-usage)
@@ -33,7 +37,9 @@ Each server member sets their own preferred language once — directly, inherite
 - **Flexible language configuration:** members set their own language, admins can set it for a specific member, a role, or the whole server as a fallback — an explicit setting always overrides a role default.
 - **On-demand fallback:** right-click any message → Apps → "Translate Message" for a one-off ephemeral translation (no privileged Discord intent needed for this path).
 - **Modular:** built as a small platform of independent modules — Translation is on by default, and admins opt into others per server with `/polyglot-modules`. The Events module adds alliance event planning with RSVP flag reactions and automatic reminders (1h/30min/10min/at-start, mentioning only who confirmed), a free self-hosted alternative to paid bots like Raid-Helper. The Polls module posts native Discord polls with a simple `;`-separated options syntax and an admin "End Poll" early-close command. The Activity module gives admins an on-demand and weekly view of who's gone quiet, without ever leaving your own infrastructure.
-- **Fully self-hosted:** three Docker services (`libretranslate` for language detection, `nllb` for translation, `bot`), no external translation API or third-party bot dependency.
+- **Fully self-hosted:** three Docker services per stack (`libretranslate` for language detection, `nllb` for translation, plus the platform adapter), no external translation API or third-party bot dependency — your messages never leave your own infrastructure.
+- **Slack adapter:** the same translation core in a Slack workspace, as a separate stack — on-demand and ephemeral only (a "Translate message" shortcut and flag-emoji reactions, visible only to whoever asked), connected via Socket Mode so it needs no public endpoint. See [Slack Adapter](#-slack-adapter).
+- **Per-deployment glossary:** terms the model must never translate (product names, in-game vocabulary) live in a mounted JSON file per deployment, not in this repo — see [Translation Glossary](#-translation-glossary).
 - **Automated Version Control:** automatic version bumping, tagging, and promotion across branches (dev → test → prod → main).
 - **Automated Release Notes:** GitHub Releases with categorized changelogs generated from conventional commits.
 
@@ -148,7 +154,48 @@ If you're upgrading from an older deploy that used a `./data` bind mount, migrat
 
 After the first launch, redeploy with `./deploy.sh [service]` instead of a plain `docker compose build`/`up` (`service` defaults to `bot`; use `./deploy.sh nllb` or `./deploy.sh libretranslate` for the other two). It refuses to run if there are uncommitted changes. For `bot` specifically, it also bakes the current git commit and a short commit log into the image (`deploy_sha.txt`/`deploy_commit_log.txt`) — the bot reads those on startup to post what changed to `LOG_CHANNEL_ID` (set up above), keyed on the actual deployed commit rather than a version bump.
 
-Language coverage for translation is limited to the languages mapped in `app/modules/translation/lang_codes.py` (curated common languages, not the full FLORES-200/200-language set) — `/setlanguage` with an unmapped code fails with a clear error instead of mistranslating.
+Language coverage for translation is limited to the languages mapped in `core/lang_codes.py` (curated common languages, not the full FLORES-200/200-language set) — `/setlanguage` with an unmapped code fails with a clear error instead of mistranslating.
+
+### 📖 Translation Glossary
+
+Some terms must survive translation verbatim — product names, in-game vocabulary, all-caps UI labels. The `nllb` service protects them via a **per-deployment glossary file**, mounted read-only into the container (`./config:/config`, read from `GLOSSARY_PATH`, default `/config/glossary.json`):
+
+```bash
+cp config/glossary.example.json config/glossary.json   # then edit for your deployment
+```
+
+- `config/glossary.json` is **gitignored** — each deployment's vocabulary stays out of this public repo. The committed `config/glossary.example.json` (the in-game glossary this project was born with) is a real, working example.
+- Schema: `{"any_case": [...], "exact_case": [...]}`. `any_case` terms match case-insensitively with word boundaries and are restored with the author's exact casing; `exact_case` is for all-caps labels (`"SUMMON"`) whose lowercase forms are ordinary words that must stay translatable.
+- No file (or an invalid one) degrades to an **empty glossary** with a logged warning — translation keeps working, nothing is protected.
+- Changes to the file are picked up on the next `nllb` container start (`./deploy.sh nllb`, or `docker compose restart nllb` — the file is a mount, so a restart is enough for this one case).
+
+### 💼 Slack Adapter
+
+The Slack adapter brings the same self-hosted translation pipeline to a Slack workspace, as a **fully separate Docker stack** (own containers, own volumes, own `.env`) — deliberately minimal and quiet for a workspace context: nothing is ever posted publicly, translations are visible only to whoever asked for them.
+
+**Create the Slack app** (one-time, manual — tokens are secrets and never committed):
+
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) → **Create New App** → **From a manifest**, and paste `slack_app/manifest.yml`. It declares the minimal bot scopes (`channels:history`, `groups:history`, `reactions:read`, `chat:write`, `commands`), the event subscriptions, the message shortcut, the `/polyglot-lang` command, and Socket Mode.
+2. Under **Basic Information → App-Level Tokens**, generate a token with the `connections:write` scope — this is `SLACK_APP_TOKEN` (`xapp-...`), required for Socket Mode.
+3. **Install the app to the workspace** (Install App). Copy the **Bot User OAuth Token** (`xoxb-...`) from **OAuth & Permissions** — this is `SLACK_BOT_TOKEN`.
+
+**Run the stack:**
+
+```bash
+cp .env.slack.template .env    # fill in SLACK_BOT_TOKEN + SLACK_APP_TOKEN
+cp config/glossary.example.json config/glossary.json   # or write your own glossary
+docker compose -f docker-compose.slack.yml up -d --build
+```
+
+Socket Mode keeps every connection outbound (a websocket over 443) — no public endpoint, no inbound ports, so the stack runs anywhere Docker does.
+
+**Usage:**
+
+- The bot only sees the channels it's **invited to** — `/invite @polyglot-relay` in a channel is the whole opt-in.
+- **`/polyglot-lang <code>`** sets your preferred language (`/polyglot-lang clear` removes it, `/polyglot-lang list` shows every supported code). Without one, translations fall back to the deployment's `DEFAULT_TARGET_LANGUAGE`.
+- **Message shortcut** — hover a message → ⋮ → **Translate message**: translates it to your language, shown only to you (original included underneath for verification).
+- **Flag-emoji reaction** (e.g. `:flag-co:`): translates that message to the flag's language, again only for you. This path resolves the message text from an in-memory cache of recent messages — Slack's `reaction_added` event doesn't carry the text, and `conversations.history` is rate-limited to ~1 request/minute for new non-Marketplace apps, so a message from before the bot's last restart (and out of the cache) may answer "too old to translate on demand". The shortcut has no such limit: its payload carries the message itself.
+- Scope is **translation only**: the events/polls/verification/activity modules are Discord-native (scheduled events, native polls, roles) and don't exist on Slack.
 
 ### 🛸 Pre-Commit Hooks
 
@@ -206,7 +253,7 @@ _Development only — installs `hadolint`, used by the pre-commit Dockerfile-lin
 - **`/help`**: summary of every command above, in one place.
 - **Right-click a message → Apps → Translate Message**: on-demand ephemeral translation of that one message, visible only to you, regardless of whether you've set a language.
 - **Right-click a message → Apps → Retry Translation** _(admin)_: manually re-runs the automatic translation on that specific message — for when it didn't fire on its own (e.g. the bot was down when the message was sent). Reports back (ephemeral) whether it delivered a translation, found nothing to translate, or failed.
-- **Automatic translation delivery**: works in regular text channels, in threads, and in forum channel posts (a forum post is a thread under the hood). For **reply** and **thread** mode, the bot collects the distinct languages (explicit or via role) among members who can actually see that channel, skipping the author and any language that already matches the detected source, and always includes the server's fallback language (English by default, override with `/setserverlanguage`) — delivered in the same channel, public, either as a **reply** to the message (no extra click, doesn't ping the author, Discord's native reply reference links back to the source) or as a **thread** on the message, per the server's `/setbehavior` setting. Discord doesn't support nesting a thread inside a thread, so a message that's already inside a thread (including forum posts) always delivers as a reply, regardless of `/setbehavior`. In **DM** mode, there's no server-wide fallback and nothing is public: each member who configured a language (directly or via role) gets a private DM with just their translation — someone with DMs from server members disabled is silently skipped, everyone else still gets theirs. In **flag reactions** mode (the default), nothing is translated upfront: the bot adds one flag-emoji reaction per active language (from `app/modules/translation/lang_codes.py`'s `ISO_TO_FLAG` mapping — a language with no distinct country flag, like Catalan, is skipped) to the original message, and only translates when someone clicks one of those reactions, posting the result as a public reply visible to everyone in the channel — the closest equivalent to how iTranslator's own Flag-Reaction Feature works, since Discord doesn't let a bot show different content to different viewers of the same message. The bot ignores its own reactions (adding the flags never triggers a translation), and reacting with an unmapped emoji, or on a server not currently in reactions mode, does nothing. Each language gets its own color-coded embed (title `code — Name`, a fixed color per code from `app/modules/translation/lang_codes.py`'s validated 8-color categorical palette, reused past the 8th language — identity is never color-alone, the code/name text is always there too) so languages are visually distinguishable at a glance. Batched across multiple messages if there are more than 10 active languages or the combined text is large (Discord's per-message embed count/size limits). If nobody active has a language configured, nothing is sent. There's no per-channel throttling, but translation requests to the `nllb` service are capped at 2 concurrent in-flight calls to avoid saturating it during a burst.
+- **Automatic translation delivery**: works in regular text channels, in threads, and in forum channel posts (a forum post is a thread under the hood). For **reply** and **thread** mode, the bot collects the distinct languages (explicit or via role) among members who can actually see that channel, skipping the author and any language that already matches the detected source, and always includes the server's fallback language (English by default, override with `/setserverlanguage`) — delivered in the same channel, public, either as a **reply** to the message (no extra click, doesn't ping the author, Discord's native reply reference links back to the source) or as a **thread** on the message, per the server's `/setbehavior` setting. Discord doesn't support nesting a thread inside a thread, so a message that's already inside a thread (including forum posts) always delivers as a reply, regardless of `/setbehavior`. In **DM** mode, there's no server-wide fallback and nothing is public: each member who configured a language (directly or via role) gets a private DM with just their translation — someone with DMs from server members disabled is silently skipped, everyone else still gets theirs. In **flag reactions** mode (the default), nothing is translated upfront: the bot adds one flag-emoji reaction per active language (from `core/lang_codes.py`'s `ISO_TO_FLAG` mapping — a language with no distinct country flag, like Catalan, is skipped) to the original message, and only translates when someone clicks one of those reactions, posting the result as a public reply visible to everyone in the channel — the closest equivalent to how iTranslator's own Flag-Reaction Feature works, since Discord doesn't let a bot show different content to different viewers of the same message. The bot ignores its own reactions (adding the flags never triggers a translation), and reacting with an unmapped emoji, or on a server not currently in reactions mode, does nothing. Each language gets its own color-coded embed (title `code — Name`, a fixed color per code from `core/lang_codes.py`'s validated 8-color categorical palette, reused past the 8th language — identity is never color-alone, the code/name text is always there too) so languages are visually distinguishable at a glance. Batched across multiple messages if there are more than 10 active languages or the combined text is large (Discord's per-message embed count/size limits). If nobody active has a language configured, nothing is sent. There's no per-channel throttling, but translation requests to the `nllb` service are capped at 2 concurrent in-flight calls to avoid saturating it during a burst.
 
 #### Events module
 
