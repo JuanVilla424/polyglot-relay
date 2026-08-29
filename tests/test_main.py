@@ -151,6 +151,22 @@ def test_on_message_dispatches_to_every_active_modules_handler(tmp_path, monkeyp
     handle_b.assert_awaited_once_with(bot_main.client, message)
 
 
+def test_on_message_honeypot_claim_stops_the_dispatch(tmp_path, monkeypatch):
+    """A message the honeypot gate claims never reaches any module."""
+    _use_tmp_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(bot_main.honeypot, "handle_honeypot_message", AsyncMock(return_value=True))
+    handle_message = AsyncMock()
+    monkeypatch.setattr(
+        bot_main, "MODULES", {"fake": _make_fake_module(handle_message=handle_message)}
+    )
+    storage.set_module_enabled(1, "fake", True)
+    message = _make_message(100, guild_id=1)
+
+    asyncio.run(bot_main.on_message(message))
+
+    handle_message.assert_not_awaited()
+
+
 def test_on_message_ignores_subject_members(tmp_path, monkeypatch):
     """A member carrying the quarantine role is never dispatched to any module --
     their messages don't get translated, counted, or otherwise amplified."""

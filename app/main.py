@@ -4,7 +4,7 @@ import discord
 from discord import app_commands
 from discord.ext import tasks
 
-from app import discord_utils, storage
+from app import discord_utils, honeypot, storage
 from app.config import DISCORD_BOT_TOKEN
 from app.logger import logger
 from app.modules import MODULES, checks
@@ -67,6 +67,8 @@ async def on_message(message: discord.Message):
     their content must never be translated, counted, or amplified.
     """
     if message.author.bot or message.guild is None:
+        return
+    if await honeypot.handle_honeypot_message(client, message):
         return
     if checks.is_subject(message.author):
         return

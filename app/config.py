@@ -33,6 +33,9 @@ GUEST_ROLE_ID = int(_guest_role_id) if _guest_role_id else None
 _subject_role_id = os.getenv("SUBJECT_ROLE_ID")
 SUBJECT_ROLE_ID = int(_subject_role_id) if _subject_role_id else None
 
+_honeypot_channel_id = os.getenv("HONEYPOT_CHANNEL_ID")
+HONEYPOT_CHANNEL_ID = int(_honeypot_channel_id) if _honeypot_channel_id else None
+
 _verify_approver_role_ids = os.getenv("VERIFY_APPROVER_ROLE_IDS", "")
 VERIFY_APPROVER_ROLE_IDS = [
     int(role_id.strip()) for role_id in _verify_approver_role_ids.split(",") if role_id.strip()
